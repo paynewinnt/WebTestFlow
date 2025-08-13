@@ -1,9 +1,9 @@
 package middleware
 
 import (
-	"webtestflow/backend/pkg/auth"
 	"net/http"
 	"strings"
+	"webtestflow/backend/pkg/auth"
 
 	"github.com/gin-gonic/gin"
 )

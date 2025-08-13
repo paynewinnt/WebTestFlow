@@ -351,7 +351,7 @@ const Executions: React.FC = () => {
       dataIndex: 'start_time',
       key: 'start_time',
       width: 150,
-      render: (date: string) => new Date(date).toLocaleString(),
+      render: (date: string) => dayjs(date).format('YYYY/M/D HH:mm:ss'),
       sorter: (a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime(),
       defaultSortOrder: 'descend' as const,
     },
@@ -360,7 +360,7 @@ const Executions: React.FC = () => {
       dataIndex: 'end_time',
       key: 'end_time',
       width: 150,
-      render: (date: string | null) => date ? new Date(date).toLocaleString() : '-',
+      render: (date: string | null) => date ? dayjs(date).format('YYYY/M/D HH:mm:ss') : '-',
     },
     {
       title: '操作',

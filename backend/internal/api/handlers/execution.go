@@ -89,7 +89,7 @@ func GetExecutionStatistics(c *gin.Context) {
 
 	// 获取各状态的执行次数
 	var passedCount, failedCount, runningCount, pendingCount int64
-	
+
 	baseQuery := database.DB.Model(&models.TestExecution{}).Where("execution_type != ?", "test_case_internal")
 	if projectID != "" {
 		baseQuery = baseQuery.Joins("LEFT JOIN test_cases ON test_executions.test_case_id = test_cases.id").
@@ -106,7 +106,7 @@ func GetExecutionStatistics(c *gin.Context) {
 	}
 
 	baseQuery.Where("test_executions.status = ?", "passed").Count(&passedCount)
-	
+
 	baseQuery2 := database.DB.Model(&models.TestExecution{}).Where("execution_type != ?", "test_case_internal")
 	if projectID != "" {
 		baseQuery2 = baseQuery2.Joins("LEFT JOIN test_cases ON test_executions.test_case_id = test_cases.id").
@@ -122,7 +122,7 @@ func GetExecutionStatistics(c *gin.Context) {
 		baseQuery2 = baseQuery2.Where("test_executions.created_at BETWEEN ? AND ?", startDate+" 00:00:00", endDate+" 23:59:59")
 	}
 	baseQuery2.Where("test_executions.status = ?", "failed").Count(&failedCount)
-	
+
 	baseQuery3 := database.DB.Model(&models.TestExecution{}).Where("execution_type != ?", "test_case_internal")
 	if projectID != "" {
 		baseQuery3 = baseQuery3.Joins("LEFT JOIN test_cases ON test_executions.test_case_id = test_cases.id").
@@ -138,7 +138,7 @@ func GetExecutionStatistics(c *gin.Context) {
 		baseQuery3 = baseQuery3.Where("test_executions.created_at BETWEEN ? AND ?", startDate+" 00:00:00", endDate+" 23:59:59")
 	}
 	baseQuery3.Where("test_executions.status = ?", "running").Count(&runningCount)
-	
+
 	baseQuery4 := database.DB.Model(&models.TestExecution{}).Where("execution_type != ?", "test_case_internal")
 	if projectID != "" {
 		baseQuery4 = baseQuery4.Joins("LEFT JOIN test_cases ON test_executions.test_case_id = test_cases.id").
@@ -308,7 +308,7 @@ func GetExecutionScreenshots(c *gin.Context) {
 		"screenshots":           screenshots,
 		"execution_screenshots": executionScreenshots,
 		"debug_info": gin.H{
-			"screenshot_count": len(screenshots),
+			"screenshot_count":           len(screenshots),
 			"execution_screenshot_count": len(executionScreenshots),
 		},
 	})
@@ -425,7 +425,7 @@ func GetCurrentBatchExecutions(c *gin.Context) {
 
 	// 查找当前套件执行的内部用例执行记录：优先使用parent_execution_id精确匹配
 	query := database.DB.Model(&models.TestExecution{}).
-		Where("parent_execution_id = ? AND execution_type = ?", 
+		Where("parent_execution_id = ? AND execution_type = ?",
 			currentExecution.ID, "test_case_internal")
 
 	// Count total for new approach
@@ -437,9 +437,9 @@ func GetCurrentBatchExecutions(c *gin.Context) {
 		startTimeTo := currentExecution.StartTime.Add(1 * 60 * 1000000000)    // 1分钟后
 
 		query = database.DB.Model(&models.TestExecution{}).
-			Where("test_suite_id = ? AND execution_type = ? AND start_time BETWEEN ? AND ?", 
+			Where("test_suite_id = ? AND execution_type = ? AND start_time BETWEEN ? AND ?",
 				currentExecution.TestSuiteID, "test_case_internal", startTimeFrom, startTimeTo)
-		
+
 		// Recount for fallback approach
 		query.Count(&total)
 	}

@@ -160,7 +160,7 @@ func (s *SchedulerService) executeScheduledTestSuite(testSuiteID uint) {
 
 			now := time.Now()
 			execution.EndTime = &now
-			execution.Duration = int(now.Sub(execution.StartTime).Seconds())
+			execution.Duration = int(now.Sub(execution.StartTime).Milliseconds())
 
 			// Save logs and screenshots
 			if logsJSON, err := json.Marshal(result.Logs); err == nil {

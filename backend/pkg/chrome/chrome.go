@@ -64,15 +64,15 @@ func GetFlatpakChromePath() string {
 	if !isFlatpakChromeAvailable() {
 		return ""
 	}
-	
+
 	// 使用相对路径
 	wrapperPath := "./scripts/chrome-flatpak-wrapper.sh"
-	
+
 	// 检查包装脚本是否存在
 	if _, err := os.Stat(wrapperPath); err == nil {
 		return wrapperPath
 	}
-	
+
 	return ""
 }
 
@@ -93,4 +93,3 @@ func isFlatpakChromeAvailable() bool {
 	outputStr := string(output)
 	return strings.Contains(outputStr, "com.google.Chrome") || strings.Contains(outputStr, "org.chromium.Chromium")
 }
-

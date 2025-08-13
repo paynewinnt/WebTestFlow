@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -17,9 +18,9 @@ import (
 	"webtestflow/backend/internal/models"
 	"webtestflow/backend/pkg/chrome"
 
+	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 	"github.com/chromedp/chromedp/device"
-	"github.com/chromedp/cdproto/target"
 )
 
 type TestExecutor struct {
@@ -159,18 +160,18 @@ func (te *TestExecutor) ExecuteTestCaseDirectly(execution *models.TestExecution,
 	// Add panic recovery to prevent service crash
 	var result ExecutionResult
 	var panicRecovered bool
-	
+
 	defer func() {
 		if r := recover(); r != nil {
 			panicRecovered = true
 			log.Printf("🚨 PANIC recovered in ExecuteTestCaseDirectly for execution %d: %v", execution.ID, r)
-			
+
 			// Force cleanup of any stuck Chrome processes
 			go func() {
 				time.Sleep(2 * time.Second)
 				te.forceKillChromeProcesses()
 			}()
-			
+
 			result = ExecutionResult{
 				Success:      false,
 				ErrorMessage: fmt.Sprintf("ChromeDP panic recovered: %v", r),
@@ -288,16 +289,16 @@ func (te *TestExecutor) executeTestCase(executionID uint, testCase *models.TestC
 
 	// 使用专用的Chrome管理器避免ChromeDP v0.9.2的channel竞争问题
 	targetURL := testCase.Environment.BaseURL
-	
+
 	// 对于可视化执行，检查是否有已存在的Chrome实例
 	var port int
 	existingPort := chrome.GlobalChromeManager.GetExistingPort(executionID, isVisual)
-	
+
 	if isVisual && existingPort > 0 {
 		// 尝试复用已存在的Chrome实例
 		result.addLog("info", fmt.Sprintf("🔄 Attempting to reuse existing Chrome instance for execution %d on port %d", executionID, existingPort), -1)
 		port = existingPort
-		
+
 		// 验证连接是否可用 - 如果不可用，将启动新实例
 		debugURL := fmt.Sprintf("http://localhost:%d/json/version", port)
 		client := &http.Client{Timeout: 2 * time.Second}
@@ -312,11 +313,11 @@ func (te *TestExecutor) executeTestCase(executionID uint, testCase *models.TestC
 			result.addLog("info", fmt.Sprintf("✅ Successfully connected to existing Chrome instance on port %d", port), -1)
 		}
 	}
-	
+
 	if !isVisual || existingPort == 0 {
 		// 启动新的Chrome实例，直接加载目标URL避免空白页
 		result.addLog("info", fmt.Sprintf("🚀 Starting Chrome with target URL: %s", targetURL), -1)
-		
+
 		port, err = chrome.GlobalChromeManager.StartChromeWithURL(executionID, isVisual, targetURL)
 		if err != nil {
 			result.Success = false
@@ -326,55 +327,55 @@ func (te *TestExecutor) executeTestCase(executionID uint, testCase *models.TestC
 		}
 		result.addLog("info", fmt.Sprintf("✅ Chrome started successfully on port %d with target page loaded", port), -1)
 	}
-	
+
 	// 确保Chrome进程在函数退出时被完全关闭
 	var chromeCleanup func()
 	var chromeContext context.Context
 	defer func() {
 		result.addLog("info", fmt.Sprintf("🧹 Starting Chrome cleanup for execution %d", executionID), -1)
-		
+
 		// Step 1: Try to gracefully close browser tabs first (for visual executions)
 		if chromeContext != nil && isVisual {
 			result.addLog("info", "🔄 Attempting graceful browser close...", -1)
 			te.closeBrowser(chromeContext)
 		}
-		
+
 		// Step 2: Close ChromeDP contexts
 		if chromeCleanup != nil {
 			result.addLog("info", "🔄 Closing ChromeDP contexts...", -1)
 			chromeCleanup()
 		}
-		
+
 		// Step 3: Stop Chrome process (gracefully first, then force if needed)
 		result.addLog("info", fmt.Sprintf("🛑 Stopping Chrome process for execution %d", executionID), -1)
 		chrome.GlobalChromeManager.StopChrome(executionID)
 		result.addLog("info", fmt.Sprintf("✅ Chrome cleanup completed for execution %d", executionID), -1)
 	}()
-	
+
 	// Chrome启动时已经包含动态就绪检测，无需额外等待
 	result.addLog("info", "✅ Chrome is ready for connection", -1)
-	
+
 	// 连接到已运行的Chrome实例
 	debugURL := fmt.Sprintf("http://localhost:%d", port)
 	result.addLog("info", fmt.Sprintf("🔗 Connecting to Chrome at %s", debugURL), -1)
-	
+
 	// 创建带超时的上下文
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	result.addLog("info", "📋 Created main context with timeout", -1)
-	
+
 	// 连接到已运行的Chrome实例
 	result.addLog("info", "🔌 Creating remote allocator connection...", -1)
 	allocCtx, cancel2 := chromedp.NewRemoteAllocator(ctx, debugURL)
 	defer cancel2()
 	result.addLog("info", "✅ Remote allocator created successfully", -1)
-	
+
 	// 获取Chrome中已存在的标签页，连接到第一个而不是创建新的
 	result.addLog("info", "📄 Looking for existing tabs to connect to...", -1)
-	
+
 	// 等待Chrome完全准备就绪
 	time.Sleep(200 * time.Millisecond)
-	
+
 	// 使用HTTP直接获取标签页列表（更可靠的方法）
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Get(fmt.Sprintf("http://localhost:%d/json", port))
@@ -385,32 +386,32 @@ func (te *TestExecutor) executeTestCase(executionID uint, testCase *models.TestC
 		return result
 	}
 	defer resp.Body.Close()
-	
+
 	// 解析标签页列表
 	var tabs []struct {
-		ID             string `json:"id"`
-		Type           string `json:"type"`
-		URL            string `json:"url"`
-		Title          string `json:"title"`
+		ID                   string `json:"id"`
+		Type                 string `json:"type"`
+		URL                  string `json:"url"`
+		Title                string `json:"title"`
 		WebSocketDebuggerURL string `json:"webSocketDebuggerUrl"`
 	}
-	
+
 	if err := json.NewDecoder(resp.Body).Decode(&tabs); err != nil {
 		result.Success = false
 		result.ErrorMessage = fmt.Sprintf("Failed to parse Chrome tabs: %v", err)
 		result.addLog("error", fmt.Sprintf("❌ Failed to parse tabs: %v", err), -1)
 		return result
 	}
-	
+
 	// 查找第一个页面类型的标签页
 	var targetTab *struct {
-		ID             string `json:"id"`
-		Type           string `json:"type"`
-		URL            string `json:"url"`
-		Title          string `json:"title"`
+		ID                   string `json:"id"`
+		Type                 string `json:"type"`
+		URL                  string `json:"url"`
+		Title                string `json:"title"`
 		WebSocketDebuggerURL string `json:"webSocketDebuggerUrl"`
 	}
-	
+
 	for i := range tabs {
 		if tabs[i].Type == "page" {
 			targetTab = &tabs[i]
@@ -418,25 +419,25 @@ func (te *TestExecutor) executeTestCase(executionID uint, testCase *models.TestC
 			break
 		}
 	}
-	
+
 	if targetTab == nil {
 		result.Success = false
 		result.ErrorMessage = "No existing page tab found to connect to"
 		result.addLog("error", "❌ No page tab found", -1)
 		return result
 	}
-	
+
 	result.addLog("info", fmt.Sprintf("📊 Total tabs found: %d, connecting to first page tab", len(tabs)), -1)
-	
+
 	// 连接到指定的已存在标签页
 	ctx, cancel3 := chromedp.NewContext(allocCtx,
-		chromedp.WithTargetID(target.ID(targetTab.ID)), // 连接到指定标签页
+		chromedp.WithTargetID(target.ID(targetTab.ID)),     // 连接到指定标签页
 		chromedp.WithLogf(func(string, ...interface{}) {}), // 禁用ChromeDP的debug日志
 	)
-	
+
 	// 保存Chrome上下文以便后续清理使用
 	chromeContext = ctx
-	
+
 	// 测试连接是否成功 - 尝试获取当前页面标题
 	var pageTitle string
 	testErr := chromedp.Run(ctx, chromedp.Title(&pageTitle))
@@ -447,7 +448,7 @@ func (te *TestExecutor) executeTestCase(executionID uint, testCase *models.TestC
 		return result
 	}
 	result.addLog("info", fmt.Sprintf("✅ Successfully connected to existing tab (title: '%s')", pageTitle), -1)
-	
+
 	// 设置清理函数，确保上下文在进程关闭前被关闭
 	chromeCleanup = func() {
 		if cancel3 != nil {
@@ -460,14 +461,14 @@ func (te *TestExecutor) executeTestCase(executionID uint, testCase *models.TestC
 			cancel()
 		}
 	}
-	
+
 	result.addLog("info", "✅ Execution context created", -1)
 
 	startTime := time.Now()
 
 	// 设置设备模拟
 	result.addLog("info", fmt.Sprintf("📱 Configuring device emulation: %s (%dx%d)", testCase.Device.Name, testCase.Device.Width, testCase.Device.Height), -1)
-	
+
 	// Enable device emulation with mobile parameters
 	deviceInfo := device.Info{
 		Name:      testCase.Device.Name,
@@ -479,7 +480,7 @@ func (te *TestExecutor) executeTestCase(executionID uint, testCase *models.TestC
 		Mobile:    true,  // Enable mobile mode
 		Touch:     true,  // Enable touch events
 	}
-	
+
 	// Apply device emulation
 	err = chromedp.Run(ctx, chromedp.Emulate(deviceInfo))
 	if err != nil {
@@ -489,11 +490,11 @@ func (te *TestExecutor) executeTestCase(executionID uint, testCase *models.TestC
 		return result
 	}
 	result.addLog("info", fmt.Sprintf("✅ Device emulation (%s) configured successfully", testCase.Device.Name), -1)
-	
+
 	// 检查当前页面URL，智能决定是否需要导航
 	var currentURL string
 	urlErr := chromedp.Run(ctx, chromedp.Location(&currentURL))
-	
+
 	// 智能导航逻辑：Chrome启动时已加载目标URL，检查是否需要导航
 	needNavigation := false
 	if urlErr == nil {
@@ -515,13 +516,13 @@ func (te *TestExecutor) executeTestCase(executionID uint, testCase *models.TestC
 		result.addLog("warn", fmt.Sprintf("⚠️ Failed to get current URL: %v, will attempt navigation", urlErr), -1)
 		needNavigation = true
 	}
-	
+
 	// 在当前标签页中导航到目标页面（仅在必要时）
 	if needNavigation {
 		result.addLog("info", fmt.Sprintf("🔄 Navigating current tab to target page: %s", targetURL), -1)
-		
+
 		// 使用chromedp.Navigate确保在当前标签页中导航
-		err = chromedp.Run(ctx, 
+		err = chromedp.Run(ctx,
 			chromedp.Navigate(targetURL),
 			chromedp.WaitReady("body", chromedp.ByQuery), // 等待页面基本加载
 		)
@@ -685,52 +686,165 @@ func (te *TestExecutor) executeStep(ctx context.Context, step models.TestStep, s
 		return te.executeKeydown(ctx, step)
 	case "scroll":
 		return te.executeScroll(ctx, step)
-	case "touchstart", "touchend":
+	case "touchstart", "touchend", "touchmove":
 		return te.executeTouch(ctx, step)
+	case "swipe":
+		return te.executeSwipe(ctx, step)
+	case "mousedrag":
+		return te.executeMouseDrag(ctx, step)
 	case "change":
 		return te.executeChange(ctx, step)
 	case "submit":
 		return te.executeSubmit(ctx, step)
+	case "navigate":
+		return te.executeNavigate(ctx, step)
+	case "cross_domain_navigation":
+		return te.executeCrossDomainNavigation(ctx, step)
+	case "back":
+		return te.executeBack(ctx, step)
+	case "beforeunload":
+		return te.executeBeforeunload(ctx, step)
+	case "popstate":
+		return te.executePopstate(ctx, step)
+	case "hashchange":
+		return te.executeHashchange(ctx, step)
 	default:
 		return fmt.Errorf("unsupported step type: %s", step.Type)
 	}
 }
 
 func (te *TestExecutor) executeClick(ctx context.Context, step models.TestStep) error {
-	// Enhanced approach with better element waiting and retry mechanism
+	// Get fallback selectors from step options
+	var fallbackSelectors []string
+	if step.Options != nil {
+		if fallbacks, ok := step.Options["fallbackSelectors"].([]interface{}); ok {
+			for _, fb := range fallbacks {
+				if sel, ok := fb.(string); ok {
+					fallbackSelectors = append(fallbackSelectors, sel)
+				}
+			}
+		}
+	}
 
-	// First, wait for the element to be visible and enabled
+	// Prepare all selectors to try (primary + fallbacks)
+	selectorsToTry := []string{step.Selector}
+	selectorsToTry = append(selectorsToTry, fallbackSelectors...)
+
+	// Try each selector until one works
+	for i, selector := range selectorsToTry {
+		log.Printf("Trying selector %d/%d: %s", i+1, len(selectorsToTry), selector)
+
+		// Handle special text-content selector
+		if strings.Contains(selector, "[text-content=") {
+			if err := te.executeClickByText(ctx, selector, step); err == nil {
+				return nil
+			}
+			continue
+		}
+
+		// First, wait for the element to be visible and enabled
+		err := chromedp.Run(ctx,
+			chromedp.WaitVisible(selector, chromedp.ByQuery),
+			chromedp.WaitEnabled(selector, chromedp.ByQuery),
+		)
+
+		if err != nil {
+			log.Printf("Element not found with selector %s: %v", selector, err)
+			continue // Try next selector
+		}
+
+		// Add additional wait for dynamic content to stabilize
+		time.Sleep(300 * time.Millisecond)
+
+		// Try clicking with retry mechanism
+		maxRetries := 3
+		var clickErr error
+		for attempt := 1; attempt <= maxRetries; attempt++ {
+			clickErr = chromedp.Run(ctx,
+				chromedp.Click(selector, chromedp.ByQuery),
+				chromedp.Sleep(200*time.Millisecond),
+			)
+
+			if clickErr == nil {
+				log.Printf("Successfully clicked element with selector: %s", selector)
+				return nil // Success
+			}
+
+			if attempt < maxRetries {
+				log.Printf("Click attempt %d failed for element %s: %v, retrying...", attempt, selector, clickErr)
+				time.Sleep(time.Duration(attempt) * 500 * time.Millisecond) // Exponential backoff
+			}
+		}
+
+		// If we got here, all click attempts failed for this selector
+		log.Printf("All click attempts failed for selector: %s", selector)
+	}
+
+	// If we got here, all selectors failed
+	return fmt.Errorf("failed to click element with any selector (tried %d selectors)", len(selectorsToTry))
+}
+
+func (te *TestExecutor) executeClickByText(ctx context.Context, selector string, step models.TestStep) error {
+	// Extract text content from selector like *[text-content="some text"]
+	textPattern := `\[text-content="([^"]+)"\]`
+	re := regexp.MustCompile(textPattern)
+	matches := re.FindStringSubmatch(selector)
+
+	if len(matches) < 2 {
+		return fmt.Errorf("invalid text-content selector: %s", selector)
+	}
+
+	targetText := matches[1]
+
+	// Use JavaScript to find element by text content
+	clickScript := fmt.Sprintf(`
+		(function() {
+			function findElementByText(text) {
+				const walker = document.createTreeWalker(
+					document.body,
+					NodeFilter.SHOW_TEXT,
+					null,
+					false
+				);
+
+				let node;
+				while (node = walker.nextNode()) {
+					if (node.textContent.trim() === text.trim()) {
+						let element = node.parentElement;
+						while (element && element.tagName) {
+							if (element.offsetWidth > 0 && element.offsetHeight > 0) {
+								return element;
+							}
+							element = element.parentElement;
+						}
+					}
+				}
+				return null;
+			}
+
+			const element = findElementByText('%s');
+			if (element) {
+				element.click();
+				return true;
+			}
+			return false;
+		})();
+	`, targetText)
+
+	var success bool
 	err := chromedp.Run(ctx,
-		chromedp.WaitVisible(step.Selector, chromedp.ByQuery),
-		chromedp.WaitEnabled(step.Selector, chromedp.ByQuery),
+		chromedp.Evaluate(clickScript, &success),
 	)
 
 	if err != nil {
-		return fmt.Errorf("failed to wait for element %s to be visible and enabled: %v", step.Selector, err)
+		return fmt.Errorf("failed to execute text-based click: %v", err)
 	}
 
-	// Add additional wait for dynamic content to stabilize
-	time.Sleep(500 * time.Millisecond)
-
-	// Try clicking with retry mechanism
-	maxRetries := 3
-	for attempt := 1; attempt <= maxRetries; attempt++ {
-		err = chromedp.Run(ctx,
-			chromedp.Click(step.Selector, chromedp.ByQuery),
-			chromedp.Sleep(200*time.Millisecond),
-		)
-
-		if err == nil {
-			return nil // Success
-		}
-
-		if attempt < maxRetries {
-			log.Printf("Click attempt %d failed for element %s: %v, retrying...", attempt, step.Selector, err)
-			time.Sleep(time.Duration(attempt) * 500 * time.Millisecond) // Exponential backoff
-		}
+	if !success {
+		return fmt.Errorf("could not find element with text: %s", targetText)
 	}
 
-	return fmt.Errorf("failed to click element %s after %d attempts: %v", step.Selector, maxRetries, err)
+	return nil
 }
 
 func (te *TestExecutor) executeInput(ctx context.Context, step models.TestStep) error {
@@ -763,7 +877,161 @@ func (te *TestExecutor) executeTouch(ctx context.Context, step models.TestStep) 
 	if step.Type == "touchstart" {
 		return te.executeClick(ctx, step)
 	}
+	// touchmove and touchend are usually handled as part of swipe
 	return nil
+}
+
+func (te *TestExecutor) executeSwipe(ctx context.Context, step models.TestStep) error {
+	// Extract swipe coordinates
+	startX, startXOk := step.Coordinates["startX"].(float64)
+	startY, startYOk := step.Coordinates["startY"].(float64)
+	endX, endXOk := step.Coordinates["endX"].(float64)
+	endY, endYOk := step.Coordinates["endY"].(float64)
+
+	if !startXOk || !startYOk || !endXOk || !endYOk {
+		// Fallback: try to determine swipe based on direction and element
+		direction := step.Value
+		if direction == "" {
+			return fmt.Errorf("swipe coordinates or direction not available")
+		}
+
+		// Use a simple scroll based on direction
+		return te.executeDirectionalSwipe(ctx, direction, step.Selector)
+	}
+
+	// Calculate swipe distance and duration
+	deltaX := endX - startX
+	deltaY := endY - startY
+
+	// Use JavaScript to simulate the swipe
+	swipeScript := fmt.Sprintf(`
+		(function() {
+			const element = document.querySelector('%s');
+			if (!element) {
+				window.scrollBy(%f, %f);
+				return;
+			}
+			
+			// Create touch events
+			const startEvent = new TouchEvent('touchstart', {
+				bubbles: true,
+				cancelable: true,
+				touches: [new Touch({
+					identifier: 0,
+					target: element,
+					clientX: %f,
+					clientY: %f,
+					pageX: %f,
+					pageY: %f
+				})]
+			});
+			
+			const moveEvent = new TouchEvent('touchmove', {
+				bubbles: true,
+				cancelable: true,
+				touches: [new Touch({
+					identifier: 0,
+					target: element,
+					clientX: %f,
+					clientY: %f,
+					pageX: %f,
+					pageY: %f
+				})]
+			});
+			
+			const endEvent = new TouchEvent('touchend', {
+				bubbles: true,
+				cancelable: true,
+				changedTouches: [new Touch({
+					identifier: 0,
+					target: element,
+					clientX: %f,
+					clientY: %f,
+					pageX: %f,
+					pageY: %f
+				})]
+			});
+			
+			// Dispatch events with timing
+			element.dispatchEvent(startEvent);
+			setTimeout(() => {
+				element.dispatchEvent(moveEvent);
+				setTimeout(() => {
+					element.dispatchEvent(endEvent);
+				}, 50);
+			}, 50);
+			
+			// Also trigger scroll if it's a vertical swipe
+			if (Math.abs(%f) > Math.abs(%f)) {
+				window.scrollBy(0, %f);
+			}
+		})();
+	`, step.Selector, deltaX, deltaY,
+		startX, startY, startX, startY,
+		endX, endY, endX, endY,
+		endX, endY, endX, endY,
+		deltaY, deltaX, deltaY)
+
+	return chromedp.Run(ctx,
+		chromedp.Evaluate(swipeScript, nil),
+		chromedp.Sleep(300*time.Millisecond),
+	)
+}
+
+func (te *TestExecutor) executeDirectionalSwipe(ctx context.Context, direction, selector string) error {
+	var scrollScript string
+
+	switch direction {
+	case "up":
+		scrollScript = "window.scrollBy(0, -300);"
+	case "down":
+		scrollScript = "window.scrollBy(0, 300);"
+	case "left":
+		scrollScript = "window.scrollBy(-300, 0);"
+	case "right":
+		scrollScript = "window.scrollBy(300, 0);"
+	default:
+		return fmt.Errorf("unsupported swipe direction: %s", direction)
+	}
+
+	return chromedp.Run(ctx,
+		chromedp.Evaluate(scrollScript, nil),
+		chromedp.Sleep(300*time.Millisecond),
+	)
+}
+
+func (te *TestExecutor) executeMouseDrag(ctx context.Context, step models.TestStep) error {
+	// Extract coordinates
+	x, xOk := step.Coordinates["x"].(float64)
+	y, yOk := step.Coordinates["y"].(float64)
+
+	if !xOk || !yOk {
+		return fmt.Errorf("mouse drag coordinates not available")
+	}
+
+	// For mousedrag events, we simulate a click at the position
+	// This is useful for tracking intermediate drag positions
+	dragScript := fmt.Sprintf(`
+		(function() {
+			const element = document.querySelector('%s');
+			if (element) {
+				const event = new MouseEvent('mousemove', {
+					bubbles: true,
+					cancelable: true,
+					clientX: %f,
+					clientY: %f,
+					button: 0,
+					buttons: 1
+				});
+				element.dispatchEvent(event);
+			}
+		})();
+	`, step.Selector, x, y)
+
+	return chromedp.Run(ctx,
+		chromedp.Evaluate(dragScript, nil),
+		chromedp.Sleep(50*time.Millisecond), // Short delay for drag
+	)
 }
 
 func (te *TestExecutor) executeChange(ctx context.Context, step models.TestStep) error {
@@ -954,8 +1222,16 @@ func (te *TestExecutor) getStepDescription(step models.TestStep) string {
 		return fmt.Sprintf("按键: %s", step.Value)
 	case "scroll":
 		return "页面滚动"
-	case "touchstart", "touchend":
-		return fmt.Sprintf("触摸操作: %s", step.Selector)
+	case "touchstart":
+		return fmt.Sprintf("触摸开始: %s", step.Selector)
+	case "touchend":
+		return fmt.Sprintf("触摸结束: %s", step.Selector)
+	case "touchmove":
+		return fmt.Sprintf("触摸移动: %s", step.Selector)
+	case "swipe":
+		return fmt.Sprintf("滑动操作: %s (%s)", step.Selector, step.Value)
+	case "mousedrag":
+		return fmt.Sprintf("鼠标拖动: %s", step.Selector)
 	case "change":
 		return fmt.Sprintf("更改 %s 的值为: %s", step.Selector, step.Value)
 	case "submit":
@@ -984,8 +1260,19 @@ func (te *TestExecutor) getDetailedStepDescription(step models.TestStep, stepInd
 			return fmt.Sprintf("%s 📜 页面滚动到位置: Y=%.0f", progress, coords)
 		}
 		return fmt.Sprintf("%s 📜 页面滚动操作", progress)
-	case "touchstart", "touchend":
-		return fmt.Sprintf("%s 👆 触摸操作: %s", progress, step.Selector)
+	case "touchstart":
+		return fmt.Sprintf("%s 👆 触摸开始: %s", progress, step.Selector)
+	case "touchend":
+		return fmt.Sprintf("%s 👆 触摸结束: %s", progress, step.Selector)
+	case "touchmove":
+		return fmt.Sprintf("%s 👆 触摸移动: %s", progress, step.Selector)
+	case "swipe":
+		if direction := step.Value; direction != "" {
+			return fmt.Sprintf("%s 👆 滑动操作: %s (方向: %s)", progress, step.Selector, direction)
+		}
+		return fmt.Sprintf("%s 👆 滑动操作: %s", progress, step.Selector)
+	case "mousedrag":
+		return fmt.Sprintf("%s 🖱️ 鼠标拖动: %s", progress, step.Selector)
 	case "change":
 		return fmt.Sprintf("%s 🔄 更改元素值 %s → %s", progress, step.Selector, step.Value)
 	case "submit":
@@ -1181,4 +1468,364 @@ func (te *TestExecutor) forceKillChromeProcesses() {
 			log.Printf("Force killed Chrome processes on Windows")
 		}
 	}
+}
+
+// executeNavigate handles page navigation steps with enhanced stability
+func (te *TestExecutor) executeNavigate(ctx context.Context, step models.TestStep) error {
+	targetURL := step.Value
+	if targetURL == "" {
+		return fmt.Errorf("navigate step requires a URL in value field")
+	}
+	
+	log.Printf("🌐 Executing enhanced navigation to: %s", targetURL)
+	
+	// Get current URL for comparison
+	var currentURL string
+	chromedp.Run(ctx, chromedp.Location(&currentURL))
+	log.Printf("📍 Current URL before navigation: %s", currentURL)
+	
+	// Multi-stage navigation with enhanced error handling
+	maxRetries := 3
+	var lastError error
+	
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		log.Printf("🔄 Navigation attempt %d/%d to: %s", attempt, maxRetries, targetURL)
+		
+		// Progressive timeout based on attempt number
+		timeout := time.Duration(10+attempt*5) * time.Second
+		navCtx, cancel := context.WithTimeout(ctx, timeout)
+		
+		err := chromedp.Run(navCtx,
+			// Enhanced navigation sequence
+			chromedp.Navigate(targetURL),
+			chromedp.Sleep(1*time.Second), // Initial wait for navigation to start
+			chromedp.WaitReady("body", chromedp.ByQuery), // Wait for basic DOM
+		)
+		
+		cancel()
+		
+		if err != nil {
+			lastError = err
+			log.Printf("❌ Navigation attempt %d failed: %v", attempt, err)
+			
+			// If not the last attempt, wait before retry
+			if attempt < maxRetries {
+				waitTime := time.Duration(attempt*2) * time.Second
+				log.Printf("⏳ Waiting %v before retry...", waitTime)
+				time.Sleep(waitTime)
+				continue
+			}
+		} else {
+			// Verify navigation succeeded
+			var newURL string
+			chromedp.Run(ctx, chromedp.Location(&newURL))
+			log.Printf("📍 URL after navigation: %s", newURL)
+			
+			// Additional stability wait with document ready check
+			err = te.enhancedPageStabilization(ctx, targetURL)
+			if err != nil {
+				log.Printf("⚠️ Page stabilization had issues: %v", err)
+			}
+			
+			log.Printf("✅ Successfully navigated to: %s", targetURL)
+			return nil
+		}
+	}
+	
+	return fmt.Errorf("navigation failed after %d attempts. Last error: %w", maxRetries, lastError)
+}
+
+// executeCrossDomainNavigation handles cross-domain navigation steps with enhanced stability
+func (te *TestExecutor) executeCrossDomainNavigation(ctx context.Context, step models.TestStep) error {
+	targetURL := step.Value
+	if targetURL == "" {
+		return fmt.Errorf("cross_domain_navigation step requires a URL in value field")
+	}
+	
+	log.Printf("🌐 Executing enhanced cross-domain navigation to: %s", targetURL)
+	
+	// Get current domain for logging
+	var currentURL string
+	chromedp.Run(ctx, chromedp.Location(&currentURL))
+	log.Printf("📍 Current URL before cross-domain navigation: %s", currentURL)
+	
+	// Get additional options for domain info
+	var fromDomain, toDomain string
+	if step.Options != nil {
+		if from, ok := step.Options["from_domain"].(string); ok {
+			fromDomain = from
+		}
+		if to, ok := step.Options["to_domain"].(string); ok {
+			toDomain = to
+		}
+	}
+	
+	if fromDomain != "" && toDomain != "" {
+		log.Printf("🔄 Cross-domain navigation: %s -> %s", fromDomain, toDomain)
+	}
+	
+	// Enhanced cross-domain navigation with multiple retries
+	maxRetries := 5 // More retries for cross-domain navigation
+	var lastError error
+	
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		log.Printf("🔄 Cross-domain attempt %d/%d to: %s", attempt, maxRetries, targetURL)
+		
+		// Progressive timeout for cross-domain navigation
+		timeout := time.Duration(15+attempt*10) * time.Second // Longer timeouts for cross-domain
+		navCtx, cancel := context.WithTimeout(ctx, timeout)
+		
+		err := chromedp.Run(navCtx,
+			// Enhanced cross-domain navigation sequence
+			chromedp.Navigate(targetURL),
+			chromedp.Sleep(2*time.Second), // Longer initial wait for cross-domain
+			chromedp.WaitReady("body", chromedp.ByQuery),
+		)
+		
+		cancel()
+		
+		if err != nil {
+			lastError = err
+			log.Printf("❌ Cross-domain attempt %d failed: %v", attempt, err)
+			
+			// Progressive backoff for cross-domain retries
+			if attempt < maxRetries {
+				waitTime := time.Duration(attempt*3) * time.Second // Longer wait between retries
+				log.Printf("⏳ Cross-domain retry waiting %v...", waitTime)
+				time.Sleep(waitTime)
+				continue
+			}
+		} else {
+			// Enhanced verification for cross-domain navigation
+			var newURL string
+			chromedp.Run(ctx, chromedp.Location(&newURL))
+			log.Printf("📍 URL after cross-domain navigation: %s", newURL)
+			
+			// Extended stabilization for cross-domain pages
+			err = te.enhancedCrossDomainStabilization(ctx, targetURL, toDomain)
+			if err != nil {
+				log.Printf("⚠️ Cross-domain stabilization had issues: %v", err)
+			}
+			
+			log.Printf("✅ Cross-domain navigation complete. Final URL: %s", newURL)
+			return nil
+		}
+	}
+	
+	return fmt.Errorf("cross-domain navigation failed after %d attempts. Last error: %w", maxRetries, lastError)
+}
+
+// executeBack handles browser back navigation
+func (te *TestExecutor) executeBack(ctx context.Context, step models.TestStep) error {
+	log.Printf("🔙 Executing browser back navigation")
+	
+	err := chromedp.Run(ctx, chromedp.NavigateBack())
+	if err != nil {
+		return fmt.Errorf("failed to navigate back: %w", err)
+	}
+	
+	// Wait for page to load after going back
+	err = chromedp.Run(ctx,
+		chromedp.WaitReady("body", chromedp.ByQuery),
+		chromedp.Sleep(2*time.Second),
+	)
+	if err != nil {
+		log.Printf("Warning: failed to wait after back navigation: %v", err)
+	}
+	
+	// Get current URL for logging
+	var currentURL string
+	chromedp.Run(ctx, chromedp.Location(&currentURL))
+	log.Printf("✅ Back navigation complete. Current URL: %s", currentURL)
+	
+	return nil
+}
+
+// enhancedPageStabilization provides comprehensive page stabilization after navigation
+func (te *TestExecutor) enhancedPageStabilization(ctx context.Context, targetURL string) error {
+	log.Printf("🔧 Starting enhanced page stabilization for: %s", targetURL)
+	
+	// Stage 1: Basic DOM ready check
+	err := chromedp.Run(ctx,
+		chromedp.WaitReady("html", chromedp.ByQuery),
+		chromedp.Sleep(1*time.Second),
+	)
+	if err != nil {
+		log.Printf("⚠️ Stage 1 stabilization failed: %v", err)
+	}
+	
+	// Stage 2: Document ready state verification
+	var readyState string
+	for attempt := 1; attempt <= 5; attempt++ {
+		chromedp.Run(ctx, chromedp.Evaluate(`document.readyState`, &readyState))
+		log.Printf("🔍 Document ready state (attempt %d): %s", attempt, readyState)
+		
+		if readyState == "complete" {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	
+	// Stage 3: Wait for potential JavaScript frameworks to initialize
+	err = chromedp.Run(ctx,
+		chromedp.Sleep(2*time.Second), // Allow time for JS frameworks
+		chromedp.Evaluate(`
+			// Check if common frameworks are initializing
+			if (typeof window.jQuery !== 'undefined' && window.jQuery.isReady === false) {
+				return 'jquery_loading';
+			}
+			if (typeof window.Vue !== 'undefined' || typeof window.React !== 'undefined') {
+				return 'framework_detected';
+			}
+			return 'ready';
+		`, &readyState),
+	)
+	
+	log.Printf("📊 Page framework status: %s", readyState)
+	
+	// Stage 4: Final verification
+	var pageTitle string
+	var currentURL string
+	chromedp.Run(ctx, chromedp.Title(&pageTitle))
+	chromedp.Run(ctx, chromedp.Location(&currentURL))
+	
+	log.Printf("✅ Page stabilization complete - Title: '%s', URL: '%s'", pageTitle, currentURL)
+	return nil
+}
+
+// enhancedCrossDomainStabilization provides extended stabilization for cross-domain navigation
+func (te *TestExecutor) enhancedCrossDomainStabilization(ctx context.Context, targetURL, toDomain string) error {
+	log.Printf("🌐 Starting enhanced cross-domain stabilization for: %s (domain: %s)", targetURL, toDomain)
+	
+	// Extended stabilization for cross-domain pages
+	err := chromedp.Run(ctx,
+		chromedp.Sleep(3*time.Second), // Longer initial wait for cross-domain
+		chromedp.WaitReady("html", chromedp.ByQuery),
+		chromedp.Sleep(2*time.Second), // Additional wait for cross-domain resources
+	)
+	
+	if err != nil {
+		log.Printf("⚠️ Cross-domain basic stabilization failed: %v", err)
+	}
+	
+	// Verify domain change
+	var currentURL string
+	chromedp.Run(ctx, chromedp.Location(&currentURL))
+	
+	if toDomain != "" && !strings.Contains(currentURL, toDomain) {
+		log.Printf("⚠️ Expected domain '%s' but current URL is '%s'", toDomain, currentURL)
+	}
+	
+	// Extended document ready verification for cross-domain
+	var readyState string
+	maxWait := 10 // Wait up to 10 attempts for cross-domain pages
+	for attempt := 1; attempt <= maxWait; attempt++ {
+		chromedp.Run(ctx, chromedp.Evaluate(`document.readyState`, &readyState))
+		log.Printf("🔍 Cross-domain ready state (attempt %d/%d): %s", attempt, maxWait, readyState)
+		
+		if readyState == "complete" {
+			break
+		}
+		time.Sleep(time.Duration(attempt) * 500 * time.Millisecond) // Progressive wait
+	}
+	
+	// Additional stabilization for potential cross-domain security/loading delays
+	err = chromedp.Run(ctx,
+		chromedp.Sleep(4*time.Second), // Extended wait for cross-domain content
+		chromedp.Evaluate(`
+			// Check for common cross-domain loading indicators
+			var loadingElements = document.querySelectorAll('.loading, .spinner, [data-loading="true"]');
+			return loadingElements.length === 0 ? 'no_loading' : 'loading_detected';
+		`, &readyState),
+	)
+	
+	log.Printf("📊 Cross-domain loading status: %s", readyState)
+	
+	var pageTitle string
+	chromedp.Run(ctx, chromedp.Title(&pageTitle))
+	chromedp.Run(ctx, chromedp.Location(&currentURL))
+	
+	log.Printf("✅ Cross-domain stabilization complete - Title: '%s', Final URL: '%s'", pageTitle, currentURL)
+	return nil
+}
+
+// executeBeforeunload handles beforeunload events (page about to unload)
+func (te *TestExecutor) executeBeforeunload(ctx context.Context, step models.TestStep) error {
+	log.Printf("⚠️ Processing beforeunload event - page is about to navigate away")
+	
+	// beforeunload is typically a notification that navigation is about to happen
+	// In test execution, we just acknowledge it and prepare for potential navigation
+	
+	// Add a small wait to simulate the brief moment before navigation
+	err := chromedp.Run(ctx, chromedp.Sleep(200*time.Millisecond))
+	if err != nil {
+		log.Printf("Warning: failed to wait during beforeunload: %v", err)
+	}
+	
+	log.Printf("✅ Beforeunload event processed - ready for navigation")
+	return nil
+}
+
+// executePopstate handles popstate events (browser history navigation)
+func (te *TestExecutor) executePopstate(ctx context.Context, step models.TestStep) error {
+	log.Printf("🔙 Processing popstate event - browser history navigation")
+	
+	// popstate events are triggered by back/forward navigation
+	// In test execution, we don't need to trigger it - it's informational
+	
+	// Wait for the popstate navigation to complete
+	err := chromedp.Run(ctx,
+		chromedp.Sleep(1*time.Second),
+		chromedp.WaitReady("body", chromedp.ByQuery),
+	)
+	
+	if err != nil {
+		log.Printf("Warning: popstate stabilization failed: %v", err)
+	}
+	
+	// Get current URL after popstate
+	var currentURL string
+	chromedp.Run(ctx, chromedp.Location(&currentURL))
+	log.Printf("✅ Popstate event processed - Current URL: %s", currentURL)
+	
+	return nil
+}
+
+// executeHashchange handles hashchange events (URL hash changes)
+func (te *TestExecutor) executeHashchange(ctx context.Context, step models.TestStep) error {
+	log.Printf("🔗 Processing hashchange event")
+	
+	targetHash := step.Value
+	if targetHash != "" {
+		log.Printf("🎯 Hash changing to: %s", targetHash)
+		
+		// If we have a target hash, navigate to it
+		var currentURL string
+		chromedp.Run(ctx, chromedp.Location(&currentURL))
+		
+		// Remove existing hash and add new one
+		baseURL := strings.Split(currentURL, "#")[0]
+		newURL := baseURL + "#" + targetHash
+		
+		err := chromedp.Run(ctx,
+			chromedp.Navigate(newURL),
+			chromedp.Sleep(500*time.Millisecond), // Brief wait for hash change
+		)
+		
+		if err != nil {
+			return fmt.Errorf("failed to navigate to hash %s: %w", targetHash, err)
+		}
+		
+		log.Printf("✅ Hash navigation complete: %s", newURL)
+	} else {
+		// Just acknowledge the hash change
+		err := chromedp.Run(ctx, chromedp.Sleep(200*time.Millisecond))
+		if err != nil {
+			log.Printf("Warning: failed to wait during hashchange: %v", err)
+		}
+		
+		log.Printf("✅ Hashchange event processed")
+	}
+	
+	return nil
 }

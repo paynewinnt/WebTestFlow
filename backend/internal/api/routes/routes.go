@@ -3,9 +3,9 @@ package routes
 import (
 	"log"
 	"os"
-	"webtestflow/backend/internal/config"
-	"webtestflow/backend/internal/api/middleware"
 	"webtestflow/backend/internal/api/handlers"
+	"webtestflow/backend/internal/api/middleware"
+	"webtestflow/backend/internal/config"
 
 	"github.com/gin-gonic/gin"
 )
@@ -29,7 +29,7 @@ func SetupRoutes(cfg *config.Config) *gin.Engine {
 
 		// Health check
 		v1.GET("/health", handlers.HealthCheck)
-		
+
 		// WebSocket endpoint (no auth middleware for WebSocket)
 		v1.GET("/ws/recording", handlers.RecordingWebSocket)
 
@@ -135,7 +135,7 @@ func SetupRoutes(cfg *config.Config) *gin.Engine {
 
 			// WebSocket moved to public routes above
 		}
-		
+
 		// API for serving screenshots (supports daily folders)
 		router.GET("/api/v1/screenshots/*filepath", func(c *gin.Context) {
 			filepath := c.Param("filepath")
@@ -144,14 +144,14 @@ func SetupRoutes(cfg *config.Config) *gin.Engine {
 				filepath = filepath[1:]
 			}
 			fullPath := "../screenshots/" + filepath
-			
+
 			// Check if file exists
 			if _, err := os.Stat(fullPath); os.IsNotExist(err) {
 				log.Printf("Screenshot file not found: %s", fullPath)
 				c.JSON(404, gin.H{"error": "Screenshot not found"})
 				return
 			}
-			
+
 			log.Printf("Serving screenshot: %s", fullPath)
 			c.File(fullPath)
 		})

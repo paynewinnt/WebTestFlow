@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="32" height="32" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="grad1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#667eea;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#764ba2;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  
+  <!-- 背景 -->
+  <rect width="32" height="32" rx="8" fill="url(#grad1)"/>
+  
+  <!-- W字母设计（代表WebTestFlow） -->
+  <path d="M 6 10 L 9 22 L 12 14 L 16 22 L 20 14 L 23 22 L 26 10" 
+        stroke="#ffffff" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  
+  <!-- 流程点 -->
+  <circle cx="6" cy="10" r="2" fill="#ffffff"/>
+  <circle cx="12" cy="14" r="1.5" fill="#ffffff" opacity="0.9"/>
+  <circle cx="20" cy="14" r="1.5" fill="#ffffff" opacity="0.9"/>
+  <circle cx="26" cy="10" r="2" fill="#ffffff"/>
+  
+  <!-- 底部装饰线 -->
+  <line x1="8" y1="26" x2="24" y2="26" stroke="#ffffff" stroke-width="1.5" opacity="0.7" stroke-linecap="round"/>
+</svg>

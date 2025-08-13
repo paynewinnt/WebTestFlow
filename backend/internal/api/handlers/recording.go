@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"webtestflow/backend/internal/models"
 	"webtestflow/backend/internal/recorder"
+	"webtestflow/backend/pkg/chrome"
 	"webtestflow/backend/pkg/database"
 	"webtestflow/backend/pkg/response"
 	"webtestflow/backend/pkg/utils"
@@ -51,11 +52,9 @@ func StartRecording(c *gin.Context) {
 	// Generate session ID
 	sessionID := uuid.New().String()
 
-	// Create device info for recorder
-	deviceInfo := recorder.DeviceInfo{
-		Width:     device.Width,
-		Height:    device.Height,
-		UserAgent: device.UserAgent,
+	// Use ChromeDP's built-in device info - just pass device name
+	deviceInfo := chrome.DeviceInfo{
+		Name: device.Name, // ChromeDP will handle the rest
 	}
 
 	// Start recording with environment's base URL

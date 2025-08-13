@@ -1,13 +1,13 @@
 package handlers
 
 import (
+	"fmt"
+	"strconv"
+	"time"
 	"webtestflow/backend/internal/models"
 	"webtestflow/backend/pkg/database"
 	"webtestflow/backend/pkg/response"
 	"webtestflow/backend/pkg/utils"
-	"fmt"
-	"strconv"
-	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -109,7 +109,7 @@ func CreateReport(c *gin.Context) {
 	// Verify test suite if provided
 	if req.TestSuiteID != nil {
 		var testSuite models.TestSuite
-		err := database.DB.Where("id = ? AND project_id = ? AND status = ?", 
+		err := database.DB.Where("id = ? AND project_id = ? AND status = ?",
 			*req.TestSuiteID, req.ProjectID, 1).First(&testSuite).Error
 		if err != nil {
 			response.NotFound(c, "测试套件不存在或不属于该项目")
@@ -132,7 +132,7 @@ func CreateReport(c *gin.Context) {
 
 	for i, execution := range executions {
 		totalCases++
-		
+
 		switch execution.Status {
 		case "passed":
 			passedCases++
@@ -242,7 +242,7 @@ func ExportReport(c *gin.Context) {
 		for i := range report.Executions {
 			report.Executions[i].User.Password = ""
 		}
-		
+
 		filename := fmt.Sprintf("test-report-%d-%s.json", report.ID, time.Now().Format("20060102-150405"))
 		c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%s", filename))
 		c.Header("Content-Type", "application/json")
@@ -253,7 +253,7 @@ func ExportReport(c *gin.Context) {
 	// Export as HTML
 	htmlContent := generateHTMLReport(report)
 	filename := fmt.Sprintf("test-report-%d-%s.html", report.ID, time.Now().Format("20060102-150405"))
-	
+
 	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%s", filename))
 	c.Header("Content-Type", "text/html; charset=utf-8")
 	c.String(200, htmlContent)
@@ -353,7 +353,7 @@ func generateHTMLReport(report models.TestReport) string {
 
 func generateExecutionDetails(executions []models.TestExecution) string {
 	var executionsHTML string
-	
+
 	for _, execution := range executions {
 		statusClass := execution.Status
 		statusText := map[string]string{
@@ -372,7 +372,7 @@ func generateExecutionDetails(executions []models.TestExecution) string {
 		}
 
 		duration := fmt.Sprintf("%.1f秒", float64(execution.Duration)/1000.0)
-		
+
 		executionsHTML += fmt.Sprintf(`
 			<div class="execution-item">
 				<div class="execution-header">
@@ -423,7 +423,7 @@ func generateExecutionDetails(executions []models.TestExecution) string {
 				return ""
 			}())
 	}
-	
+
 	return executionsHTML
 }
 

@@ -103,6 +103,46 @@ VERBOSE=1 ./scripts/one-click-start.sh
 ./scripts/fix-permissions.sh
 ```
 
+### 🗄️ 数据库管理脚本
+
+#### `clean-database.sh` - 数据库纯净模式恢复（Bash版）
+将数据库恢复到纯净状态，清除所有业务数据。
+
+**使用方法：**
+```bash
+./scripts/clean-database.sh
+```
+
+**功能：**
+- 清空所有业务数据（项目、测试用例、测试套件、执行记录、报告等）
+- 保留admin用户
+- 保留所有设备配置（4个预设设备）
+- 保留环境配置（ID=2）
+- 交互式确认，防止误操作
+- 显示清理前后的数据统计
+
+#### `clean-database.sql` - 数据库纯净模式恢复（SQL版）
+纯SQL脚本，可直接在MySQL中执行。
+
+**使用方法：**
+```bash
+# 命令行执行
+mysql -u root -p webtestflow < scripts/clean-database.sql
+
+# MySQL控制台执行
+mysql> source scripts/clean-database.sql
+```
+
+**⚠️ 重要提示：**
+执行数据清理前，强烈建议先备份数据库：
+```bash
+# 备份数据库
+mysqldump -u root -p webtestflow > backup_$(date +%Y%m%d_%H%M%S).sql
+
+# 恢复备份
+mysql -u root -p webtestflow < backup_20241213_150000.sql
+```
+
 ## 🎯 推荐使用流程
 
 ### 首次使用

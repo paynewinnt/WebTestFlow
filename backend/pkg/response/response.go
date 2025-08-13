@@ -42,7 +42,6 @@ func Error(c *gin.Context, code int, message string) {
 	})
 }
 
-
 func BadRequest(c *gin.Context, message string) {
 	Error(c, 400, message)
 }

@@ -1,10 +1,10 @@
 package handlers
 
 import (
+	"strconv"
 	"webtestflow/backend/internal/models"
 	"webtestflow/backend/pkg/database"
 	"webtestflow/backend/pkg/response"
-	"strconv"
 
 	"github.com/gin-gonic/gin"
 )
@@ -141,7 +141,7 @@ func UpdateProject(c *gin.Context) {
 	// Check name uniqueness if updating
 	if req.Name != "" && req.Name != project.Name {
 		var existingProject models.Project
-		err := database.DB.Where("name = ? AND user_id = ? AND id != ? AND status = ?", 
+		err := database.DB.Where("name = ? AND user_id = ? AND id != ? AND status = ?",
 			req.Name, userID, id, 1).First(&existingProject).Error
 		if err == nil {
 			response.BadRequest(c, "项目名称已存在")

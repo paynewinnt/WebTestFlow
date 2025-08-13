@@ -14,6 +14,7 @@ import {
   Tag,
   Switch,
 } from 'antd';
+import dayjs from 'dayjs';
 import {
   PlusOutlined,
   EditOutlined,
@@ -223,7 +224,7 @@ const DeviceManagement: React.FC = () => {
       title: '创建时间',
       dataIndex: 'created_at',
       key: 'created_at',
-      render: (text: string) => new Date(text).toLocaleString(),
+      render: (text: string) => dayjs(text).format('YYYY/M/D HH:mm:ss'),
     },
     {
       title: '操作',

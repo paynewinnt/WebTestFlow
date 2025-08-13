@@ -22,6 +22,7 @@ import {
   Transfer,
   Divider,
 } from 'antd';
+import dayjs from 'dayjs';
 import type { TransferDirection } from 'antd/es/transfer';
 import {
   PlusOutlined,
@@ -310,7 +311,7 @@ const TestSuites: React.FC = () => {
       dataIndex: 'created_at',
       key: 'created_at',
       width: 150,
-      render: (date: string) => new Date(date).toLocaleString(),
+      render: (date: string) => dayjs(date).format('YYYY/M/D HH:mm:ss'),
     },
     {
       title: '操作',
@@ -613,10 +614,10 @@ const TestSuites: React.FC = () => {
                 </Tag>
               </Descriptions.Item>
               <Descriptions.Item label="创建时间">
-                {new Date(selectedTestSuite.created_at).toLocaleString()}
+                {dayjs(selectedTestSuite.created_at).format('YYYY/M/D HH:mm:ss')}
               </Descriptions.Item>
               <Descriptions.Item label="更新时间">
-                {new Date(selectedTestSuite.updated_at).toLocaleString()}
+                {dayjs(selectedTestSuite.updated_at).format('YYYY/M/D HH:mm:ss')}
               </Descriptions.Item>
             </Descriptions>
 

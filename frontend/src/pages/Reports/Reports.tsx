@@ -327,8 +327,8 @@ const Reports: React.FC = () => {
     projectName: string;
     environmentName?: string;
   }) => {
-    const startTime = new Date(execution.start_time).toLocaleString();
-    const endTime = execution.end_time ? new Date(execution.end_time).toLocaleString() : '未结束';
+    const startTime = dayjs(execution.start_time).format('YYYY/M/D HH:mm:ss');
+    const endTime = execution.end_time ? dayjs(execution.end_time).format('YYYY/M/D HH:mm:ss') : '未结束';
     const duration = Math.round(execution.duration / 1000);
     const status = execution.status;
     const statusText = getStatusText(status);
@@ -405,7 +405,7 @@ const Reports: React.FC = () => {
         <div class="header">
             <h1 class="title">${testName} - 测试报告</h1>
             <div class="subtitle">项目: ${projectName}</div>
-            <div class="subtitle">生成时间: ${new Date().toLocaleString()}</div>
+            <div class="subtitle">生成时间: ${dayjs().format('YYYY/M/D HH:mm:ss')}</div>
             <div class="subtitle">执行时间: ${startTime} - ${endTime}</div>
         </div>
 
@@ -465,7 +465,7 @@ const Reports: React.FC = () => {
             <div class="logs-section">
                 ${logs.map((log: any) => `
                     <div class="log-item ${log.level === 'error' ? 'log-error' : log.step_status === 'success' ? 'log-success' : 'log-info'}">
-                        <div class="log-timestamp">${new Date(log.timestamp).toLocaleString()}</div>
+                        <div class="log-timestamp">${dayjs(log.timestamp).format('YYYY/M/D HH:mm:ss')}</div>
                         <div class="log-message">${log.message}</div>
                         ${log.duration ? `<div style="color: #999; font-size: 0.8em; margin-top: 5px;">耗时: ${log.duration}ms</div>` : ''}
                     </div>
@@ -491,7 +491,7 @@ const Reports: React.FC = () => {
         ` : ''}
 
         <div class="footer">
-            <p>此报告由 WebTestFlow 自动生成 | 生成时间: ${new Date().toLocaleString()}</p>
+            <p>此报告由 WebTestFlow 自动生成 | 生成时间: ${dayjs().format('YYYY/M/D HH:mm:ss')}</p>
         </div>
     </div>
 </body>
@@ -612,7 +612,7 @@ const Reports: React.FC = () => {
       dataIndex: 'start_time',
       key: 'start_time',
       width: 150,
-      render: (date: string) => new Date(date).toLocaleString(),
+      render: (date: string) => dayjs(date).format('YYYY/M/D HH:mm:ss'),
     },
     {
       title: '操作',
@@ -799,7 +799,7 @@ const Reports: React.FC = () => {
                     {Math.round(selectedExecution.duration / 1000)} 秒
                   </Descriptions.Item>
                   <Descriptions.Item label="开始时间">
-                    {new Date(selectedExecution.start_time).toLocaleString()}
+                    {dayjs(selectedExecution.start_time).format('YYYY/M/D HH:mm:ss')}
                   </Descriptions.Item>
                 </Descriptions>
 
@@ -905,11 +905,11 @@ const Reports: React.FC = () => {
                     {Math.round((selectedTestCaseFromSuite?.duration || selectedExecution.duration) / 1000)} 秒
                   </Descriptions.Item>
                   <Descriptions.Item label="开始时间">
-                    {new Date(selectedTestCaseFromSuite?.start_time || selectedExecution.start_time).toLocaleString()}
+                    {dayjs(selectedTestCaseFromSuite?.start_time || selectedExecution.start_time).format('YYYY/M/D HH:mm:ss')}
                   </Descriptions.Item>
                   <Descriptions.Item label="结束时间">
                     {(selectedTestCaseFromSuite?.end_time || selectedExecution.end_time) ? 
-                      new Date(selectedTestCaseFromSuite?.end_time || selectedExecution.end_time!).toLocaleString() : '未结束'}
+                      dayjs(selectedTestCaseFromSuite?.end_time || selectedExecution.end_time!).format('YYYY/M/D HH:mm:ss') : '未结束'}
                   </Descriptions.Item>
                   {(selectedTestCaseFromSuite?.error_message || selectedExecution.error_message) && (
                     <Descriptions.Item label="错误信息">
@@ -1069,7 +1069,7 @@ const Reports: React.FC = () => {
                               </div>
                               <div>
                                 <Text type="secondary" style={{ fontSize: '12px' }}>
-                                  时间: {new Date(screenshot.timestamp || screenshot.created_at).toLocaleString()}
+                                  时间: {dayjs(screenshot.timestamp || screenshot.created_at).format('YYYY/M/D HH:mm:ss')}
                                 </Text>
                               </div>
                             </div>

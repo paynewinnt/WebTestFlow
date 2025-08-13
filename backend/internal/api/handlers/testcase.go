@@ -1,16 +1,16 @@
 package handlers
 
 import (
-	"webtestflow/backend/internal/executor"
-	"webtestflow/backend/internal/models"
-	"webtestflow/backend/pkg/database"
-	"webtestflow/backend/pkg/response"
-	"webtestflow/backend/pkg/utils"
 	"encoding/json"
 	"log"
 	"strconv"
 	"sync"
 	"time"
+	"webtestflow/backend/internal/executor"
+	"webtestflow/backend/internal/models"
+	"webtestflow/backend/pkg/database"
+	"webtestflow/backend/pkg/response"
+	"webtestflow/backend/pkg/utils"
 
 	"github.com/gin-gonic/gin"
 )
@@ -63,15 +63,15 @@ func CreateTestCase(c *gin.Context) {
 	}
 
 	var req struct {
-		Name           string                `json:"name" binding:"required,min=1,max=200"`
-		Description    string                `json:"description" binding:"max=1000"`
-		ProjectID      uint                  `json:"project_id" binding:"required"`
-		EnvironmentID  uint                  `json:"environment_id" binding:"required"`
-		DeviceID       uint                  `json:"device_id" binding:"required"`
-		Steps          []models.TestStep     `json:"steps"`
-		ExpectedResult string                `json:"expected_result" binding:"max=1000"`
-		Tags           string                `json:"tags" binding:"max=500"`
-		Priority       int                   `json:"priority" binding:"min=1,max=3"`
+		Name           string            `json:"name" binding:"required,min=1,max=200"`
+		Description    string            `json:"description" binding:"max=1000"`
+		ProjectID      uint              `json:"project_id" binding:"required"`
+		EnvironmentID  uint              `json:"environment_id" binding:"required"`
+		DeviceID       uint              `json:"device_id" binding:"required"`
+		Steps          []models.TestStep `json:"steps"`
+		ExpectedResult string            `json:"expected_result" binding:"max=1000"`
+		Tags           string            `json:"tags" binding:"max=500"`
+		Priority       int               `json:"priority" binding:"min=1,max=3"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -84,7 +84,7 @@ func CreateTestCase(c *gin.Context) {
 		response.NotFound(c, "项目不存在或无权限")
 		return
 	}
-	
+
 	var project models.Project
 	err := database.DB.Where("id = ? AND status = ?", req.ProjectID, 1).First(&project).Error
 	if err != nil {
@@ -206,7 +206,7 @@ func UpdateTestCase(c *gin.Context) {
 		response.NotFound(c, "测试用例不存在或无权限")
 		return
 	}
-	
+
 	var testCase models.TestCase
 	err = database.DB.Where("id = ? AND status = ?", id, 1).First(&testCase).Error
 	if err != nil {
@@ -220,7 +220,7 @@ func UpdateTestCase(c *gin.Context) {
 			response.NotFound(c, "项目不存在或无权限")
 			return
 		}
-		
+
 		var project models.Project
 		err := database.DB.Where("id = ? AND status = ?", req.ProjectID, 1).First(&project).Error
 		if err != nil {
@@ -316,7 +316,7 @@ func DeleteTestCase(c *gin.Context) {
 		response.NotFound(c, "测试用例不存在或无权限")
 		return
 	}
-	
+
 	var testCase models.TestCase
 	err = database.DB.Where("id = ? AND status = ?", id, 1).First(&testCase).Error
 	if err != nil {
@@ -361,7 +361,7 @@ func ExecuteTestCase(c *gin.Context) {
 		IsVisual *bool `json:"is_visual"`
 	}
 	c.ShouldBindJSON(&req)
-	
+
 	// Default to visual execution if not specified
 	isVisual := true
 	if req.IsVisual != nil {
@@ -400,9 +400,9 @@ func ExecuteTestCase(c *gin.Context) {
 		ExecutionType: "test_case",
 		Status:        "pending",
 		StartTime:     time.Now(),
-		TotalCount:    1,     // Single test case = 1 total
-		PassedCount:   0,     // Will be updated based on result
-		FailedCount:   0,     // Will be updated based on result
+		TotalCount:    1, // Single test case = 1 total
+		PassedCount:   0, // Will be updated based on result
+		FailedCount:   0, // Will be updated based on result
 		UserID:        userID.(uint),
 		ErrorMessage:  "",
 		ExecutionLogs: "[]",
@@ -423,11 +423,11 @@ func ExecuteTestCase(c *gin.Context) {
 	go func() {
 		var executionCompleted bool = false
 		var completionMutex sync.Mutex
-		
+
 		defer func() {
 			completionMutex.Lock()
 			defer completionMutex.Unlock()
-			
+
 			// Only check for stuck executions if normal completion didn't happen
 			if !executionCompleted {
 				var finalExecution models.TestExecution
@@ -438,20 +438,20 @@ func ExecuteTestCase(c *gin.Context) {
 						finalExecution.ErrorMessage = "Execution did not complete properly"
 						now := time.Now()
 						finalExecution.EndTime = &now
-						finalExecution.Duration = int(now.Sub(finalExecution.StartTime).Seconds())
+						finalExecution.Duration = int(now.Sub(finalExecution.StartTime).Milliseconds())
 						database.DB.Save(&finalExecution)
 						log.Printf("Fixed stuck execution %d status from 'running' to 'failed'", execution.ID)
 					}
 				}
 			}
 		}()
-		
+
 		// Start a safety timeout goroutine for extreme cases
 		go func() {
 			time.Sleep(12 * time.Minute) // Slightly less than executor timeout
 			completionMutex.Lock()
 			defer completionMutex.Unlock()
-			
+
 			if !executionCompleted {
 				// Check if executor considers this execution complete
 				if !executor.GlobalExecutor.IsRunning(execution.ID) {
@@ -459,23 +459,24 @@ func ExecuteTestCase(c *gin.Context) {
 					if err := database.DB.First(&finalExecution, execution.ID).Error; err == nil {
 						if finalExecution.Status == "running" {
 							log.Printf("⚠️ Safety timeout: Execution %d completed in executor but handler didn't receive result", execution.ID)
-							
+
 							// Try to infer success/failure based on duration and context
 							now := time.Now()
-							duration := int(now.Sub(finalExecution.StartTime).Seconds())
-							
-							if duration > 30 {
+							durationSeconds := int(now.Sub(finalExecution.StartTime).Seconds())
+							duration := int(now.Sub(finalExecution.StartTime).Milliseconds())
+
+							if durationSeconds > 30 {
 								// Ran for a reasonable time, likely completed successfully
 								finalExecution.Status = "passed"
 								finalExecution.ErrorMessage = ""
-								log.Printf("🔧 Inferred execution %d as passed (safety timeout after %d seconds)", execution.ID, duration)
+								log.Printf("🔧 Inferred execution %d as passed (safety timeout after %d seconds)", execution.ID, durationSeconds)
 							} else {
 								// Very short execution, likely failed
 								finalExecution.Status = "failed"
 								finalExecution.ErrorMessage = "Execution completed but result communication failed"
-								log.Printf("🔧 Marked execution %d as failed (safety timeout after %d seconds)", execution.ID, duration)
+								log.Printf("🔧 Marked execution %d as failed (safety timeout after %d seconds)", execution.ID, durationSeconds)
 							}
-							
+
 							finalExecution.EndTime = &now
 							finalExecution.Duration = duration
 							database.DB.Save(&finalExecution)
@@ -485,13 +486,13 @@ func ExecuteTestCase(c *gin.Context) {
 				}
 			}
 		}()
-		
+
 		resultChan := executor.GlobalExecutor.ExecuteTestCaseWithOptions(&execution, &testCase, isVisual)
 		result := <-resultChan
 
 		completionMutex.Lock()
 		defer completionMutex.Unlock()
-		
+
 		// Double-check we haven't already been marked complete by timeout handler
 		if executionCompleted {
 			log.Printf("Execution %d already marked complete by timeout handler", execution.ID)
@@ -513,7 +514,7 @@ func ExecuteTestCase(c *gin.Context) {
 
 		now := time.Now()
 		execution.EndTime = &now
-		execution.Duration = int(now.Sub(execution.StartTime).Seconds())
+		execution.Duration = int(now.Sub(execution.StartTime).Milliseconds())
 
 		// Save logs and screenshots
 		if logsJSON, err := json.Marshal(result.Logs); err == nil {
@@ -542,15 +543,15 @@ func ExecuteTestCase(c *gin.Context) {
 			result.Metrics.ExecutionID = execution.ID
 			database.DB.Create(result.Metrics)
 		}
-		
+
 		// Notify executor that database update is complete
 		if executor.GlobalExecutor != nil {
 			executor.GlobalExecutor.NotifyExecutionComplete(execution.ID)
 		}
-		
+
 		// Mark as completed AFTER successful database save
 		executionCompleted = true
-		
+
 		// Log completion for debugging
 		log.Printf("✅ Execution %d marked as completed, browser cleanup can now proceed", execution.ID)
 	}()

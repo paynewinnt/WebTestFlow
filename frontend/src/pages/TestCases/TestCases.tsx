@@ -20,6 +20,7 @@ import {
   Col,
   Statistic,
 } from 'antd';
+import dayjs from 'dayjs';
 import {
   PlusOutlined,
   EditOutlined,
@@ -271,7 +272,7 @@ const TestCases: React.FC = () => {
       dataIndex: 'created_at',
       key: 'created_at',
       width: 150,
-      render: (date: string) => new Date(date).toLocaleString(),
+      render: (date: string) => dayjs(date).format('YYYY/M/D HH:mm:ss'),
     },
     {
       title: '操作',
@@ -538,10 +539,10 @@ const TestCases: React.FC = () => {
                 {selectedTestCase.user?.username}
               </Descriptions.Item>
               <Descriptions.Item label="创建时间">
-                {new Date(selectedTestCase.created_at).toLocaleString()}
+                {dayjs(selectedTestCase.created_at).format('YYYY/M/D HH:mm:ss')}
               </Descriptions.Item>
               <Descriptions.Item label="更新时间">
-                {new Date(selectedTestCase.updated_at).toLocaleString()}
+                {dayjs(selectedTestCase.updated_at).format('YYYY/M/D HH:mm:ss')}
               </Descriptions.Item>
             </Descriptions>
 

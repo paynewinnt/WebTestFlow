@@ -1,10 +1,10 @@
 package database
 
 import (
-	"webtestflow/backend/internal/config"
-	"webtestflow/backend/internal/models"
 	"fmt"
 	"log"
+	"webtestflow/backend/internal/config"
+	"webtestflow/backend/internal/models"
 
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
@@ -15,31 +15,31 @@ var DB *gorm.DB
 
 func InitDatabase(cfg *config.Config) error {
 	var err error
-	
+
 	dsn := cfg.GetDSN()
-	
+
 	DB, err = gorm.Open(mysql.Open(dsn), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Info),
 	})
-	
+
 	if err != nil {
 		return fmt.Errorf("failed to connect to database: %w", err)
 	}
-	
+
 	sqlDB, err := DB.DB()
 	if err != nil {
 		return fmt.Errorf("failed to get sql.DB: %w", err)
 	}
-	
+
 	sqlDB.SetMaxIdleConns(10)
 	sqlDB.SetMaxOpenConns(100)
-	
+
 	if err = sqlDB.Ping(); err != nil {
 		return fmt.Errorf("failed to ping database: %w", err)
 	}
-	
+
 	log.Println("Database connected successfully")
-	
+
 	return AutoMigrate()
 }
 
@@ -56,13 +56,13 @@ func AutoMigrate() error {
 		&models.PerformanceMetric{},
 		&models.Screenshot{},
 	)
-	
+
 	if err != nil {
 		return fmt.Errorf("failed to migrate database: %w", err)
 	}
-	
+
 	log.Println("Database migration completed")
-	
+
 	return SeedDefaultData()
 }
 
@@ -102,7 +102,7 @@ func SeedDefaultData() error {
 			Status:    1,
 		},
 	}
-	
+
 	for _, device := range devices {
 		var existingDevice models.Device
 		if err := DB.Where("name = ?", device.Name).First(&existingDevice).Error; err != nil {
@@ -113,7 +113,7 @@ func SeedDefaultData() error {
 			}
 		}
 	}
-	
+
 	// Seed default environments
 	environments := []models.Environment{
 		{
@@ -135,7 +135,7 @@ func SeedDefaultData() error {
 			Status:      1,
 		},
 	}
-	
+
 	for _, env := range environments {
 		var existingEnv models.Environment
 		if err := DB.Where("name = ? AND type = ?", env.Name, env.Type).First(&existingEnv).Error; err != nil {
@@ -146,8 +146,7 @@ func SeedDefaultData() error {
 			}
 		}
 	}
-	
+
 	log.Println("Default data seeded successfully")
 	return nil
 }
-

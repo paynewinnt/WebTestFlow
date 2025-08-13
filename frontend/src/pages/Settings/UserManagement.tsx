@@ -12,6 +12,7 @@ import {
   Tag,
   Avatar,
 } from 'antd';
+import dayjs from 'dayjs';
 import {
   PlusOutlined,
   EditOutlined,
@@ -187,13 +188,13 @@ const UserManagement: React.FC = () => {
       title: '注册时间',
       dataIndex: 'created_at',
       key: 'created_at',
-      render: (text: string) => new Date(text).toLocaleString(),
+      render: (text: string) => dayjs(text).format('YYYY/M/D HH:mm:ss'),
     },
     {
       title: '最后更新',
       dataIndex: 'updated_at',
       key: 'updated_at',
-      render: (text: string) => new Date(text).toLocaleString(),
+      render: (text: string) => dayjs(text).format('YYYY/M/D HH:mm:ss'),
     },
     {
       title: '操作',

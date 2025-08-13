@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Card, Row, Col, Statistic, Table, Tag, Progress, Space, Typography } from 'antd';
+import dayjs from 'dayjs';
 import {
   ProjectOutlined,
   ExperimentOutlined,
@@ -108,13 +109,13 @@ const Dashboard: React.FC = () => {
       title: '耗时',
       dataIndex: 'duration',
       key: 'duration',
-      render: (duration: number) => `${duration}s`,
+      render: (duration: number) => `${(duration / 1000).toFixed(3)}s`,
     },
     {
       title: '开始时间',
       dataIndex: 'start_time',
       key: 'start_time',
-      render: (time: string) => new Date(time).toLocaleString(),
+      render: (time: string) => dayjs(time).format('YYYY/M/D HH:mm:ss'),
     },
   ];
 
@@ -143,13 +144,61 @@ const Dashboard: React.FC = () => {
       title: '创建时间',
       dataIndex: 'created_at',
       key: 'created_at',
-      render: (time: string) => new Date(time).toLocaleString(),
+      render: (time: string) => dayjs(time).format('YYYY/M/D HH:mm:ss'),
     },
   ];
 
   return (
     <div>
-      <Title level={2}>仪表板</Title>
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        marginBottom: '24px',
+        padding: '20px 0',
+        borderBottom: '1px solid #f0f0f0'
+      }}>
+        <div style={{
+          width: '48px',
+          height: '48px',
+          background: 'linear-gradient(135deg, #667eea, #764ba2)',
+          borderRadius: '12px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          marginRight: '16px',
+          boxShadow: '0 4px 12px rgba(102, 126, 234, 0.3)'
+        }}>
+          <svg width="28" height="28" viewBox="0 0 32 32" fill="none">
+            <path d="M 6 10 L 9 22 L 12 14 L 16 22 L 20 14 L 23 22 L 26 10" 
+                  stroke="#ffffff" strokeWidth="2.5" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
+            <circle cx="6" cy="10" r="1.5" fill="#ffffff"/>
+            <circle cx="12" cy="14" r="1" fill="#ffffff" opacity="0.9"/>
+            <circle cx="20" cy="14" r="1" fill="#ffffff" opacity="0.9"/>
+            <circle cx="26" cy="10" r="1.5" fill="#ffffff"/>
+          </svg>
+        </div>
+        <div>
+          <Title level={2} style={{ 
+            margin: 0, 
+            background: 'linear-gradient(135deg, #667eea, #764ba2)',
+            WebkitBackgroundClip: 'text',
+            WebkitTextFillColor: 'transparent',
+            backgroundClip: 'text',
+            fontSize: '28px',
+            fontWeight: '700'
+          }}>
+            WebTestFlow
+          </Title>
+          <div style={{ 
+            color: '#8c8c8c', 
+            fontSize: '14px', 
+            marginTop: '4px',
+            fontWeight: '500'
+          }}>
+            Web自动化测试平台仪表板
+          </div>
+        </div>
+      </div>
       
       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
         <Col xs={24} sm={12} md={6}>

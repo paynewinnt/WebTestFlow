@@ -1,16 +1,16 @@
 package handlers
 
 import (
-	"webtestflow/backend/internal/executor"
-	"webtestflow/backend/internal/models"
-	"webtestflow/backend/pkg/database"
-	"webtestflow/backend/pkg/response"
-	"webtestflow/backend/pkg/utils"
 	"encoding/json"
 	"fmt"
 	"log"
 	"strconv"
 	"time"
+	"webtestflow/backend/internal/executor"
+	"webtestflow/backend/internal/models"
+	"webtestflow/backend/pkg/database"
+	"webtestflow/backend/pkg/response"
+	"webtestflow/backend/pkg/utils"
 
 	"github.com/gin-gonic/gin"
 )
@@ -64,16 +64,16 @@ func CreateTestSuite(c *gin.Context) {
 	}
 
 	var req struct {
-		Name            string `json:"name" binding:"required,min=1,max=200"`
-		Description     string `json:"description" binding:"max=1000"`
-		ProjectID       uint   `json:"project_id" binding:"required"`
-		EnvironmentID   uint   `json:"environment_id" binding:"required"`
-		TestCaseIDs     []uint `json:"test_case_ids"`
-		Tags            string `json:"tags" binding:"max=500"`
-		Priority        int    `json:"priority" binding:"min=1,max=3"`
-		CronExpression  string `json:"cron_expression" binding:"max=100"`
-		IsParallel      bool   `json:"is_parallel"`
-		TimeoutMinutes  int    `json:"timeout_minutes" binding:"min=1,max=1440"`
+		Name           string `json:"name" binding:"required,min=1,max=200"`
+		Description    string `json:"description" binding:"max=1000"`
+		ProjectID      uint   `json:"project_id" binding:"required"`
+		EnvironmentID  uint   `json:"environment_id" binding:"required"`
+		TestCaseIDs    []uint `json:"test_case_ids"`
+		Tags           string `json:"tags" binding:"max=500"`
+		Priority       int    `json:"priority" binding:"min=1,max=3"`
+		CronExpression string `json:"cron_expression" binding:"max=100"`
+		IsParallel     bool   `json:"is_parallel"`
+		TimeoutMinutes int    `json:"timeout_minutes" binding:"min=1,max=1440"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -88,7 +88,7 @@ func CreateTestSuite(c *gin.Context) {
 		response.NotFound(c, "项目不存在")
 		return
 	}
-	
+
 	if !utils.HasPermissionOnProject(userID.(uint), req.ProjectID) {
 		response.Forbidden(c, "无权限在该项目中创建测试套件")
 		return
@@ -195,15 +195,15 @@ func UpdateTestSuite(c *gin.Context) {
 	}
 
 	var req struct {
-		Name            string `json:"name" binding:"omitempty,min=1,max=200"`
-		Description     string `json:"description" binding:"max=1000"`
-		EnvironmentID   uint   `json:"environment_id"`
-		TestCaseIDs     []uint `json:"test_case_ids"`
-		Tags            string `json:"tags" binding:"max=500"`
-		Priority        int    `json:"priority" binding:"min=1,max=3"`
-		CronExpression  string `json:"cron_expression" binding:"max=100"`
-		IsParallel      bool   `json:"is_parallel"`
-		TimeoutMinutes  int    `json:"timeout_minutes" binding:"min=1,max=1440"`
+		Name           string `json:"name" binding:"omitempty,min=1,max=200"`
+		Description    string `json:"description" binding:"max=1000"`
+		EnvironmentID  uint   `json:"environment_id"`
+		TestCaseIDs    []uint `json:"test_case_ids"`
+		Tags           string `json:"tags" binding:"max=500"`
+		Priority       int    `json:"priority" binding:"min=1,max=3"`
+		CronExpression string `json:"cron_expression" binding:"max=100"`
+		IsParallel     bool   `json:"is_parallel"`
+		TimeoutMinutes int    `json:"timeout_minutes" binding:"min=1,max=1440"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -217,7 +217,7 @@ func UpdateTestSuite(c *gin.Context) {
 		response.NotFound(c, "测试套件不存在")
 		return
 	}
-	
+
 	if !utils.HasPermissionOnProject(userID.(uint), testSuite.ProjectID) {
 		response.Forbidden(c, "无权限修改该测试套件")
 		return
@@ -267,7 +267,7 @@ func UpdateTestSuite(c *gin.Context) {
 	if req.TestCaseIDs != nil {
 		var testCases []models.TestCase
 		if len(req.TestCaseIDs) > 0 {
-			err = database.DB.Where("id IN ? AND project_id = ? AND status = ?", 
+			err = database.DB.Where("id IN ? AND project_id = ? AND status = ?",
 				req.TestCaseIDs, testSuite.ProjectID, 1).Find(&testCases).Error
 			if err != nil || len(testCases) != len(req.TestCaseIDs) {
 				response.BadRequest(c, "部分测试用例不存在或不属于该项目")
@@ -316,7 +316,7 @@ func DeleteTestSuite(c *gin.Context) {
 		response.NotFound(c, "测试套件不存在")
 		return
 	}
-	
+
 	if !utils.HasPermissionOnProject(userID.(uint), testSuite.ProjectID) {
 		response.Forbidden(c, "无权限删除该测试套件")
 		return
@@ -369,7 +369,7 @@ func ExecuteTestSuite(c *gin.Context) {
 		response.NotFound(c, "测试套件不存在")
 		return
 	}
-	
+
 	// Manually load test cases with proper association to ensure correct data
 	err = database.DB.Model(&testSuite).Association("TestCases").Find(&testSuite.TestCases, "status = ?", 1)
 	if err != nil {
@@ -401,7 +401,7 @@ func ExecuteTestSuite(c *gin.Context) {
 	}
 
 	runningCount := executor.GlobalExecutor.GetRunningCount()
-	if runningCount + len(testSuite.TestCases) > 10 {
+	if runningCount+len(testSuite.TestCases) > 10 {
 		response.BadRequest(c, "当前并发执行数不足以运行整个测试套件，请稍后再试")
 		return
 	}
@@ -437,7 +437,7 @@ func ExecuteTestSuite(c *gin.Context) {
 		execution := models.TestExecution{
 			TestCaseID:        &testCaseID, // Use pointer to local copy
 			TestSuiteID:       &testSuite.ID,
-			ParentExecutionID: &suiteExecution.ID, // 关联到套件执行记录
+			ParentExecutionID: &suiteExecution.ID,   // 关联到套件执行记录
 			ExecutionType:     "test_case_internal", // 标记为内部记录
 			Status:            "pending",
 			StartTime:         time.Now(),
@@ -473,33 +473,33 @@ func ExecuteTestSuite(c *gin.Context) {
 				suiteExecution.ErrorMessage = fmt.Sprintf("Suite execution panic: %v", r)
 				now := time.Now()
 				suiteExecution.EndTime = &now
-				suiteExecution.Duration = int(now.Sub(suiteExecution.StartTime).Seconds())
+				suiteExecution.Duration = int(now.Sub(suiteExecution.StartTime).Milliseconds())
 				database.DB.Save(&suiteExecution)
 				log.Printf("🛡️ Service continues running despite ChromeDP panic")
 			}
 		}()
-		
+
 		passedCount := 0
 		failedCount := 0
 		var allLogs []interface{}
 		var allScreenshots []string
 		completedExecutions := make(map[uint]bool)
-		
+
 		defer func() {
 			// Update suite execution record with final results
 			now := time.Now()
 			suiteExecution.EndTime = &now
-			suiteExecution.Duration = int(now.Sub(suiteExecution.StartTime).Seconds())
+			suiteExecution.Duration = int(now.Sub(suiteExecution.StartTime).Milliseconds())
 			suiteExecution.PassedCount = passedCount
 			suiteExecution.FailedCount = failedCount
-			
+
 			if failedCount > 0 {
 				suiteExecution.Status = "failed"
 				suiteExecution.ErrorMessage = fmt.Sprintf("套件执行完成，%d个用例失败", failedCount)
 			} else {
 				suiteExecution.Status = "passed"
 			}
-			
+
 			// Save aggregated logs and screenshots
 			if logsJSON, err := json.Marshal(allLogs); err == nil {
 				suiteExecution.ExecutionLogs = string(logsJSON)
@@ -507,10 +507,10 @@ func ExecuteTestSuite(c *gin.Context) {
 			if screenshotsJSON, err := json.Marshal(allScreenshots); err == nil {
 				suiteExecution.Screenshots = string(screenshotsJSON)
 			}
-			
+
 			database.DB.Save(&suiteExecution)
 			log.Printf("Test suite %d execution completed: %d passed, %d failed", testSuite.ID, passedCount, failedCount)
-			
+
 			// Check for stuck executions
 			for _, exec := range executions {
 				if !completedExecutions[exec.ID] {
@@ -521,7 +521,7 @@ func ExecuteTestSuite(c *gin.Context) {
 							finalExecution.ErrorMessage = "Test case execution did not complete properly"
 							now := time.Now()
 							finalExecution.EndTime = &now
-							finalExecution.Duration = int(now.Sub(finalExecution.StartTime).Seconds())
+							finalExecution.Duration = int(now.Sub(finalExecution.StartTime).Milliseconds())
 							database.DB.Save(&finalExecution)
 							log.Printf("Fixed stuck test case execution %d status from 'running' to 'failed'", exec.ID)
 						}
@@ -529,7 +529,7 @@ func ExecuteTestSuite(c *gin.Context) {
 				}
 			}
 		}()
-		
+
 		for i, execution := range executions {
 			execution.Status = "running"
 			database.DB.Save(&execution)
@@ -546,7 +546,7 @@ func ExecuteTestSuite(c *gin.Context) {
 			}
 
 			log.Printf("Starting execution of test case %d/%d: %s", i+1, len(executions), testCase.Name)
-			
+
 			// Execute with panic recovery for each individual test case
 			var result executor.ExecutionResult
 			func() {
@@ -557,7 +557,7 @@ func ExecuteTestSuite(c *gin.Context) {
 							Success:      false,
 							ErrorMessage: fmt.Sprintf("Test case execution panic: %v", r),
 							Screenshots:  []string{},
-							Logs:         []executor.ExecutionLog{
+							Logs: []executor.ExecutionLog{
 								{
 									Timestamp: time.Now(),
 									Level:     "error",
@@ -569,7 +569,7 @@ func ExecuteTestSuite(c *gin.Context) {
 						}
 					}
 				}()
-				
+
 				// Use direct execution to avoid ChromeDP concurrency issues
 				result = executor.GlobalExecutor.ExecuteTestCaseDirectly(&execution, &testCase, req.IsVisual)
 			}()
@@ -586,7 +586,7 @@ func ExecuteTestSuite(c *gin.Context) {
 
 			now := time.Now()
 			execution.EndTime = &now
-			execution.Duration = int(now.Sub(execution.StartTime).Seconds())
+			execution.Duration = int(now.Sub(execution.StartTime).Milliseconds())
 
 			// Save logs and screenshots
 			if logsJSON, err := json.Marshal(result.Logs); err == nil {
@@ -656,7 +656,7 @@ func StopTestSuite(c *gin.Context) {
 
 	// Find all running or pending executions for this test suite
 	var executions []models.TestExecution
-	err = database.DB.Where("test_suite_id = ? AND (status = ? OR status = ?)", 
+	err = database.DB.Where("test_suite_id = ? AND (status = ? OR status = ?)",
 		id, "running", "pending").Find(&executions).Error
 	if err != nil {
 		response.InternalServerError(c, "查询执行记录失败")

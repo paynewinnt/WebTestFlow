@@ -185,6 +185,10 @@ const Recording: React.FC = () => {
       scroll: 'orange',
       keydown: 'purple',
       touchstart: 'cyan',
+      touchmove: 'cyan',
+      touchend: 'cyan',
+      swipe: 'volcano',
+      mousedrag: 'geekblue',
       change: 'magenta',
       submit: 'red',
     };

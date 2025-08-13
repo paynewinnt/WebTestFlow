@@ -11,6 +11,7 @@ import {
   Tag,
   Typography 
 } from 'antd';
+import dayjs from 'dayjs';
 import { 
   PlusOutlined, 
   EditOutlined, 
@@ -134,7 +135,7 @@ const Projects: React.FC = () => {
       title: '创建时间',
       dataIndex: 'created_at',
       key: 'created_at',
-      render: (time: string) => new Date(time).toLocaleString(),
+      render: (time: string) => dayjs(time).format('YYYY/M/D HH:mm:ss'),
     },
     {
       title: '操作',

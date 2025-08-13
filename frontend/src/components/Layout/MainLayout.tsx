@@ -144,18 +144,62 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          background: 'rgba(255, 255, 255, 0.2)',
+          background: 'linear-gradient(135deg, rgba(102, 126, 234, 0.2), rgba(118, 75, 162, 0.2))',
           margin: '16px',
-          borderRadius: '6px',
+          borderRadius: '8px',
+          border: '1px solid rgba(255, 255, 255, 0.1)',
+          backdropFilter: 'blur(10px)',
         }}>
-          <h1 style={{ 
-            color: 'white', 
-            margin: 0, 
-            fontSize: collapsed ? '16px' : '18px',
-            fontWeight: 'bold'
-          }}>
-            {collapsed ? 'AU' : 'WebTestFlow'}
-          </h1>
+          {!collapsed ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <div style={{
+                width: '32px',
+                height: '32px',
+                background: 'linear-gradient(135deg, #667eea, #764ba2)',
+                borderRadius: '6px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                boxShadow: '0 2px 8px rgba(0,0,0,0.2)'
+              }}>
+                <svg width="20" height="20" viewBox="0 0 32 32" fill="none">
+                  <path d="M 6 10 L 9 22 L 12 14 L 16 22 L 20 14 L 23 22 L 26 10" 
+                        stroke="#ffffff" strokeWidth="2.5" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
+                  <circle cx="6" cy="10" r="1.5" fill="#ffffff"/>
+                  <circle cx="26" cy="10" r="1.5" fill="#ffffff"/>
+                </svg>
+              </div>
+              <h1 style={{ 
+                color: 'white', 
+                margin: 0, 
+                fontSize: '18px',
+                fontWeight: '600',
+                background: 'linear-gradient(135deg, #ffffff, #e2e8f0)',
+                WebkitBackgroundClip: 'text',
+                WebkitTextFillColor: 'transparent',
+                backgroundClip: 'text',
+                letterSpacing: '0.5px'
+              }}>
+                WebTestFlow
+              </h1>
+            </div>
+          ) : (
+            <div style={{
+              width: '28px',
+              height: '28px',
+              background: 'linear-gradient(135deg, #667eea, #764ba2)',
+              borderRadius: '6px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.2)'
+            }}>
+              <svg width="16" height="16" viewBox="0 0 32 32" fill="none">
+                <path d="M 8 12 L 12 20 L 16 16 L 20 20 L 24 12" 
+                      stroke="#ffffff" strokeWidth="3" fill="none" strokeLinecap="round"/>
+              </svg>
+            </div>
+          )}
         </div>
         
         <Menu
