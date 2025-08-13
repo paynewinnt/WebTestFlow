@@ -1,0 +1,57 @@
+# Alternative Docker Compose with different MySQL mirrors
+# version: '3.8'  # Removed to avoid obsolete warning
+
+services:
+  mysql:
+    # Try different MySQL images based on availability
+    image: mysql:8.0
+    container_name: webtestflow-mysql
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-123456}
+      MYSQL_DATABASE: ${DB_NAME:-webtestflow}
+      MYSQL_USER: ${DB_USERNAME:-webtestflow}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-123456}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./deployments/mysql/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - webtestflow-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      timeout: 20s
+      retries: 10
+      start_period: 60s
+
+  # Alternative lightweight MySQL
+  mysql-light:
+    image: mysql:8.0-debian
+    container_name: webtestflow-mysql-light
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-123456}
+      MYSQL_DATABASE: ${DB_NAME:-webtestflow}
+      MYSQL_USER: ${DB_USERNAME:-webtestflow}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-123456}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./deployments/mysql/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - webtestflow-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      timeout: 20s
+      retries: 10
+      start_period: 60s
+
+volumes:
+  mysql_data:
+    driver: local
+
+networks:
+  webtestflow-network:
+    driver: bridge
