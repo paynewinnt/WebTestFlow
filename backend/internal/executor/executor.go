@@ -92,7 +92,7 @@ func InitExecutor(maxWorkers int) {
 func (te *TestExecutor) worker() {
 	for job := range te.workQueue {
 		// Execute the test case
-		result := te.executeTestCase(job.Execution.ID, job.TestCase, job.IsVisual)
+		result := te.executeTestCase(job.Execution.ID, job.TestCase)
 
 		// Send result to handler FIRST
 		job.ResultChan <- result
@@ -120,10 +120,10 @@ func (te *TestExecutor) worker() {
 }
 
 func (te *TestExecutor) ExecuteTestCase(execution *models.TestExecution, testCase *models.TestCase) <-chan ExecutionResult {
-	return te.ExecuteTestCaseWithOptions(execution, testCase, false)
+	return te.ExecuteTestCaseWithOptions(execution, testCase)
 }
 
-func (te *TestExecutor) ExecuteTestCaseWithOptions(execution *models.TestExecution, testCase *models.TestCase, isVisual bool) <-chan ExecutionResult {
+func (te *TestExecutor) ExecuteTestCaseWithOptions(execution *models.TestExecution, testCase *models.TestCase) <-chan ExecutionResult {
 	te.mutex.Lock()
 	te.running[execution.ID] = true
 	// Create completion channel for this execution
@@ -135,7 +135,7 @@ func (te *TestExecutor) ExecuteTestCaseWithOptions(execution *models.TestExecuti
 	job := ExecutionJob{
 		Execution:    execution,
 		TestCase:     testCase,
-		IsVisual:     isVisual,
+		IsVisual:     true, // Always visual execution
 		ResultChan:   resultChan,
 		CompleteChan: completeChan,
 	}
@@ -146,7 +146,7 @@ func (te *TestExecutor) ExecuteTestCaseWithOptions(execution *models.TestExecuti
 
 // ExecuteTestCaseDirectly executes a test case directly without using the worker queue
 // This method is safer for sequential execution and avoids ChromeDP concurrency issues
-func (te *TestExecutor) ExecuteTestCaseDirectly(execution *models.TestExecution, testCase *models.TestCase, isVisual bool) ExecutionResult {
+func (te *TestExecutor) ExecuteTestCaseDirectly(execution *models.TestExecution, testCase *models.TestCase) ExecutionResult {
 	te.mutex.Lock()
 	te.running[execution.ID] = true
 	te.mutex.Unlock()
@@ -194,7 +194,7 @@ func (te *TestExecutor) ExecuteTestCaseDirectly(execution *models.TestExecution,
 	time.Sleep(500 * time.Millisecond)
 
 	// Execute directly without worker queue
-	result = te.executeTestCase(execution.ID, testCase, isVisual)
+	result = te.executeTestCase(execution.ID, testCase)
 
 	if !panicRecovered {
 		log.Printf("✅ Direct execution completed for %d (success=%v)", execution.ID, result.Success)
@@ -230,7 +230,7 @@ func (te *TestExecutor) NotifyExecutionComplete(executionID uint) {
 	}
 }
 
-func (te *TestExecutor) executeTestCase(executionID uint, testCase *models.TestCase, isVisual bool) ExecutionResult {
+func (te *TestExecutor) executeTestCase(executionID uint, testCase *models.TestCase) ExecutionResult {
 	result := ExecutionResult{
 		Screenshots: make([]string, 0),
 		Logs:        make([]ExecutionLog, 0),
@@ -290,11 +290,11 @@ func (te *TestExecutor) executeTestCase(executionID uint, testCase *models.TestC
 	// 使用专用的Chrome管理器避免ChromeDP v0.9.2的channel竞争问题
 	targetURL := testCase.Environment.BaseURL
 
-	// 对于可视化执行，检查是否有已存在的Chrome实例
+	// 检查是否有已存在的Chrome实例（可视化执行总是尝试复用）
 	var port int
-	existingPort := chrome.GlobalChromeManager.GetExistingPort(executionID, isVisual)
+	existingPort := chrome.GlobalChromeManager.GetExistingPort(executionID, true)
 
-	if isVisual && existingPort > 0 {
+	if existingPort > 0 {
 		// 尝试复用已存在的Chrome实例
 		result.addLog("info", fmt.Sprintf("🔄 Attempting to reuse existing Chrome instance for execution %d on port %d", executionID, existingPort), -1)
 		port = existingPort
@@ -314,11 +314,11 @@ func (te *TestExecutor) executeTestCase(executionID uint, testCase *models.TestC
 		}
 	}
 
-	if !isVisual || existingPort == 0 {
-		// 启动新的Chrome实例，直接加载目标URL避免空白页
-		result.addLog("info", fmt.Sprintf("🚀 Starting Chrome with target URL: %s", targetURL), -1)
+	if existingPort == 0 {
+		// 启动新的Chrome实例（可视化模式），直接加载目标URL避免空白页
+		result.addLog("info", fmt.Sprintf("🚀 Starting Chrome in visual mode with target URL: %s", targetURL), -1)
 
-		port, err = chrome.GlobalChromeManager.StartChromeWithURL(executionID, isVisual, targetURL)
+		port, err = chrome.GlobalChromeManager.StartChromeWithURL(executionID, true, targetURL)
 		if err != nil {
 			result.Success = false
 			result.ErrorMessage = fmt.Sprintf("Failed to start Chrome: %v", err)
@@ -330,23 +330,20 @@ func (te *TestExecutor) executeTestCase(executionID uint, testCase *models.TestC
 
 	// 确保Chrome进程在函数退出时被完全关闭
 	var chromeCleanup func()
-	var chromeContext context.Context
 	defer func() {
 		result.addLog("info", fmt.Sprintf("🧹 Starting Chrome cleanup for execution %d", executionID), -1)
 
-		// Step 1: Try to gracefully close browser tabs first (for visual executions)
-		if chromeContext != nil && isVisual {
-			result.addLog("info", "🔄 Attempting graceful browser close...", -1)
-			te.closeBrowser(chromeContext)
-		}
+		// Skip aggressive browser closing for visual executions to prevent page disruption
+		// Since we now only support visual execution, keep browser open to preserve page functionality
+		result.addLog("info", "🎬 Visual execution - keeping browser open to preserve page functionality", -1)
 
-		// Step 2: Close ChromeDP contexts
+		// Step 2: Close ChromeDP contexts gently
 		if chromeCleanup != nil {
 			result.addLog("info", "🔄 Closing ChromeDP contexts...", -1)
 			chromeCleanup()
 		}
 
-		// Step 3: Stop Chrome process (gracefully first, then force if needed)
+		// Step 3: Stop Chrome process (gracefully for visual, normally for non-visual)
 		result.addLog("info", fmt.Sprintf("🛑 Stopping Chrome process for execution %d", executionID), -1)
 		chrome.GlobalChromeManager.StopChrome(executionID)
 		result.addLog("info", fmt.Sprintf("✅ Chrome cleanup completed for execution %d", executionID), -1)
@@ -436,7 +433,7 @@ func (te *TestExecutor) executeTestCase(executionID uint, testCase *models.TestC
 	)
 
 	// 保存Chrome上下文以便后续清理使用
-	chromeContext = ctx
+	// Store Chrome context for graceful cleanup - removed for visual execution protection
 
 	// 测试连接是否成功 - 尝试获取当前页面标题
 	var pageTitle string
@@ -502,8 +499,8 @@ func (te *TestExecutor) executeTestCase(executionID uint, testCase *models.TestC
 			// 当前页面已经是目标页面（Chrome启动时已加载），无需导航
 			result.addLog("info", fmt.Sprintf("✅ Target page already loaded at startup: %s", currentURL), -1)
 			needNavigation = false
-		} else if isVisual && existingPort > 0 && currentURL != "" && currentURL != "about:blank" {
-			// 可视化执行复用实例，检查是否需要切换到目标页面
+		} else if existingPort > 0 && currentURL != "" && currentURL != "about:blank" {
+			// 复用实例，检查是否需要切换到目标页面
 			result.addLog("info", fmt.Sprintf("🔄 Current page in reused instance: %s, checking if navigation needed", currentURL), -1)
 			needNavigation = (currentURL != targetURL)
 		} else {
@@ -540,14 +537,12 @@ func (te *TestExecutor) executeTestCase(executionID uint, testCase *models.TestC
 	// Enhanced page load waiting for better dynamic content handling
 	result.addLog("info", "⏳ Waiting for page to load...", -1)
 
-	// Multi-stage page loading wait
-	result.addLog("info", "🔍 Waiting for DOM body element...", -1)
-	err = chromedp.Run(ctx,
-		chromedp.WaitReady("body", chromedp.ByQuery),   // Wait for basic DOM
-		chromedp.Sleep(2*time.Second),                  // Initial wait for JS to start
-		chromedp.WaitVisible("body", chromedp.ByQuery), // Wait for body to be visible
-		chromedp.Sleep(3*time.Second),                  // Additional wait for dynamic content
-	)
+	// Enhanced multi-stage page loading wait with dynamic content detection
+	result.addLog("info", "🔍 Waiting for DOM and dynamic content...", -1)
+	err = te.waitForPageStabilization(ctx)
+	if err != nil {
+		result.addLog("warn", fmt.Sprintf("⚠️ Page stabilization had some issues: %v, but continuing", err), -1)
+	}
 	if err != nil {
 		// If body is not ready, try to get page title and current URL for debugging
 		result.addLog("warn", fmt.Sprintf("⚠️ Page loading issues: %v", err), -1)
@@ -726,35 +721,63 @@ func (te *TestExecutor) executeClick(ctx context.Context, step models.TestStep) 
 		}
 	}
 
-	// Prepare all selectors to try (primary + fallbacks)
+	// Generate intelligent fallback selectors
+	smartFallbacks := te.generateSmartSelectors(step.Selector, step.Options)
+	
+	// Prepare all selectors to try (primary + manual fallbacks + smart fallbacks)
 	selectorsToTry := []string{step.Selector}
 	selectorsToTry = append(selectorsToTry, fallbackSelectors...)
+	selectorsToTry = append(selectorsToTry, smartFallbacks...)
+
+	// DEBUGGING: Log current page structure for the failed selector
+	te.debugPageStructure(ctx, step.Selector)
 
 	// Try each selector until one works
 	for i, selector := range selectorsToTry {
-		log.Printf("Trying selector %d/%d: %s", i+1, len(selectorsToTry), selector)
+		log.Printf("🔍 Trying selector %d/%d: %s", i+1, len(selectorsToTry), selector)
 
 		// Handle special text-content selector
 		if strings.Contains(selector, "[text-content=") {
 			if err := te.executeClickByText(ctx, selector, step); err == nil {
+				log.Printf("✅ Clicked successfully using text-content selector")
 				return nil
 			}
+			log.Printf("❌ Text-content selector failed")
 			continue
 		}
 
-		// First, wait for the element to be visible and enabled
-		err := chromedp.Run(ctx,
-			chromedp.WaitVisible(selector, chromedp.ByQuery),
-			chromedp.WaitEnabled(selector, chromedp.ByQuery),
-		)
+		// Check if element exists in DOM first
+		var exists bool
+		err := chromedp.Run(ctx, chromedp.Evaluate(fmt.Sprintf(`
+			document.querySelector('%s') !== null
+		`, selector), &exists))
+		
+		if err != nil {
+			log.Printf("❌ Error checking element existence: %v", err)
+			continue
+		}
+		
+		if !exists {
+			log.Printf("❌ Element does not exist in DOM: %s", selector)
+			// Log similar elements for debugging
+			te.findSimilarElements(ctx, selector)
+			continue
+		}
+
+		log.Printf("✓ Element exists in DOM: %s", selector)
+
+		// Enhanced element waiting with multiple strategies
+		err = te.waitForElementSmart(ctx, selector)
 
 		if err != nil {
-			log.Printf("Element not found with selector %s: %v", selector, err)
+			log.Printf("❌ Element not ready for interaction: %s, error: %v", selector, err)
 			continue // Try next selector
 		}
 
+		log.Printf("✓ Element ready for interaction: %s", selector)
+
 		// Add additional wait for dynamic content to stabilize
-		time.Sleep(300 * time.Millisecond)
+		time.Sleep(500 * time.Millisecond)
 
 		// Try clicking with retry mechanism
 		maxRetries := 3
@@ -766,22 +789,383 @@ func (te *TestExecutor) executeClick(ctx context.Context, step models.TestStep) 
 			)
 
 			if clickErr == nil {
-				log.Printf("Successfully clicked element with selector: %s", selector)
+				log.Printf("🎯 Successfully clicked element with selector: %s (attempt %d)", selector, attempt)
 				return nil // Success
 			}
 
 			if attempt < maxRetries {
-				log.Printf("Click attempt %d failed for element %s: %v, retrying...", attempt, selector, clickErr)
+				log.Printf("⚠️ Click attempt %d failed for element %s: %v, retrying...", attempt, selector, clickErr)
 				time.Sleep(time.Duration(attempt) * 500 * time.Millisecond) // Exponential backoff
 			}
 		}
 
 		// If we got here, all click attempts failed for this selector
-		log.Printf("All click attempts failed for selector: %s", selector)
+		log.Printf("❌ All click attempts failed for selector: %s", selector)
 	}
 
-	// If we got here, all selectors failed
+	// If we got here, all selectors failed - provide detailed debugging info
+	log.Printf("🚨 COMPLETE FAILURE: All %d selectors failed for click action", len(selectorsToTry))
+	te.debugCompleteFailure(ctx, selectorsToTry)
+	
 	return fmt.Errorf("failed to click element with any selector (tried %d selectors)", len(selectorsToTry))
+}
+
+// generateSmartSelectors creates intelligent fallback selectors based on the original selector
+func (te *TestExecutor) generateSmartSelectors(originalSelector string, options map[string]interface{}) []string {
+	var smartSelectors []string
+	
+	// Strategy 1: Remove nth-of-type constraints (most common fix)
+	relaxedSelector := te.relaxSelector(originalSelector)
+	if relaxedSelector != originalSelector {
+		smartSelectors = append(smartSelectors, relaxedSelector)
+	}
+	
+	// Strategy 2: Use only the last class in the chain (deepest element)
+	if strings.Contains(originalSelector, ".") && strings.Contains(originalSelector, ">") {
+		parts := strings.Split(originalSelector, ">")
+		if len(parts) > 0 {
+			lastPart := strings.TrimSpace(parts[len(parts)-1])
+			if strings.Contains(lastPart, ".") {
+				// Extract just the class name
+				if classMatch := strings.Split(lastPart, "."); len(classMatch) > 1 {
+					justClass := "." + classMatch[1]
+					smartSelectors = append(smartSelectors, justClass)
+				}
+			}
+		}
+	}
+	
+	// Strategy 3: Extract all individual class selectors
+	classSelectors := te.extractClassSelectors(originalSelector)
+	smartSelectors = append(smartSelectors, classSelectors...)
+	
+	// Strategy 4: Create attribute-based selectors from class names
+	if strings.Contains(originalSelector, "Protectthechild") {
+		smartSelectors = append(smartSelectors, `[class*="Protectthechild"]`)
+		smartSelectors = append(smartSelectors, `div[class*="Protectthechild"]`)
+	}
+	if strings.Contains(originalSelector, "edit") {
+		smartSelectors = append(smartSelectors, `[class*="edit"]`)
+		smartSelectors = append(smartSelectors, `div[class*="edit"]`)
+	}
+	if strings.Contains(originalSelector, "icon") {
+		smartSelectors = append(smartSelectors, `[class*="icon"]`)
+		smartSelectors = append(smartSelectors, `div[class*="icon"]`)
+	}
+	
+	// Extract element text if available for text-based selection
+	if options != nil {
+		if elementText, ok := options["elementText"].(string); ok && elementText != "" {
+			// Create selectors based on text content
+			smartSelectors = append(smartSelectors, 
+				fmt.Sprintf("*[text-content=\"%s\"]", elementText),
+				fmt.Sprintf("*:contains('%s')", elementText),
+			)
+		}
+		
+		if tagName, ok := options["tagName"].(string); ok && tagName != "" {
+			// Create tag-based selectors
+			if elementText, ok := options["elementText"].(string); ok && elementText != "" {
+				smartSelectors = append(smartSelectors,
+					fmt.Sprintf("%s[text-content=\"%s\"]", tagName, elementText),
+				)
+			}
+		}
+	}
+	
+	return smartSelectors
+}
+
+// relaxSelector removes nth-of-type and nth-child constraints to make selector more flexible
+func (te *TestExecutor) relaxSelector(selector string) string {
+	// Remove nth-of-type(n) patterns
+	re1 := regexp.MustCompile(`:nth-of-type\(\d+\)`)
+	relaxed := re1.ReplaceAllString(selector, "")
+	
+	// Remove nth-child(n) patterns  
+	re2 := regexp.MustCompile(`:nth-child\(\d+\)`)
+	relaxed = re2.ReplaceAllString(relaxed, "")
+	
+	// Clean up any double spaces or trailing/leading spaces
+	relaxed = regexp.MustCompile(`\s+`).ReplaceAllString(strings.TrimSpace(relaxed), " ")
+	
+	return relaxed
+}
+
+// extractClassSelectors extracts class-based selectors from the original selector
+func (te *TestExecutor) extractClassSelectors(selector string) []string {
+	var classSelectors []string
+	
+	// Extract class names using regex
+	classRe := regexp.MustCompile(`\.([a-zA-Z][a-zA-Z0-9_-]*)`)
+	matches := classRe.FindAllStringSubmatch(selector, -1)
+	
+	for _, match := range matches {
+		if len(match) > 1 {
+			className := match[1]
+			// Create simple class selector
+			classSelectors = append(classSelectors, fmt.Sprintf(".%s", className))
+		}
+	}
+	
+	return classSelectors
+}
+
+// waitForElementSmart uses multiple strategies to wait for element availability
+func (te *TestExecutor) waitForElementSmart(ctx context.Context, selector string) error {
+	// Strategy 1: Standard wait for visible and enabled (shorter timeout for first attempt)
+	ctxShort, cancel1 := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel1()
+	
+	err := chromedp.Run(ctxShort,
+		chromedp.WaitVisible(selector, chromedp.ByQuery),
+		chromedp.WaitEnabled(selector, chromedp.ByQuery),
+	)
+	
+	if err == nil {
+		return nil // Success with standard approach
+	}
+	
+	log.Printf("Standard wait failed for %s, trying extended strategies: %v", selector, err)
+	
+	// Strategy 2: Wait for DOM presence first, then visibility (longer timeout)
+	ctxLong, cancel2 := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel2()
+	
+	// First wait for element to exist in DOM
+	err = chromedp.Run(ctxLong, chromedp.WaitReady(selector, chromedp.ByQuery))
+	if err != nil {
+		log.Printf("Element not in DOM: %s, error: %v", selector, err)
+		return err
+	}
+	
+	// Then wait for visibility with polling
+	for i := 0; i < 30; i++ { // 30 attempts * 500ms = 15 seconds max
+		var visible bool
+		err = chromedp.Run(ctxLong, 
+			chromedp.Evaluate(fmt.Sprintf(`
+				(function() {
+					const el = document.querySelector('%s');
+					if (!el) return false;
+					const rect = el.getBoundingClientRect();
+					const style = window.getComputedStyle(el);
+					return rect.width > 0 && rect.height > 0 && 
+					       style.visibility !== 'hidden' && 
+					       style.display !== 'none' &&
+					       !el.disabled;
+				})();
+			`, selector), &visible),
+		)
+		
+		if err == nil && visible {
+			log.Printf("Element became visible after %d attempts: %s", i+1, selector)
+			return nil
+		}
+		
+		time.Sleep(500 * time.Millisecond)
+	}
+	
+	return fmt.Errorf("element %s not visible after extended wait", selector)
+}
+
+// debugPageStructure logs the current page structure to help debug selector issues
+func (te *TestExecutor) debugPageStructure(ctx context.Context, originalSelector string) {
+	log.Printf("🔍 DEBUG: Analyzing page structure for selector: %s", originalSelector)
+	
+	// Get page URL
+	var currentURL string
+	chromedp.Run(ctx, chromedp.Evaluate(`window.location.href`, &currentURL))
+	log.Printf("🔍 Current URL: %s", currentURL)
+	
+	// Get page title
+	var title string
+	chromedp.Run(ctx, chromedp.Evaluate(`document.title`, &title))
+	log.Printf("🔍 Page title: %s", title)
+	
+	// Check if the main class exists in the selector
+	if strings.Contains(originalSelector, "Protectthechild-head") {
+		var hasClass bool
+		chromedp.Run(ctx, chromedp.Evaluate(`
+			document.querySelector('.Protectthechild-head') !== null ||
+			document.querySelector('[class*="Protectthechild-head"]') !== null
+		`, &hasClass))
+		log.Printf("🔍 Protectthechild-head class exists: %t", hasClass)
+		
+		// Get all elements with similar class names
+		var similarElements string
+		chromedp.Run(ctx, chromedp.Evaluate(`
+			Array.from(document.querySelectorAll('[class*="Protectthechild"], [class*="head"]')).map(el => el.className).join(', ')
+		`, &similarElements))
+		log.Printf("🔍 Similar classes found: %s", similarElements)
+	}
+	
+	// Get DOM depth and complexity
+	var bodyHTML string
+	err := chromedp.Run(ctx, chromedp.Evaluate(`document.body ? document.body.innerHTML.substring(0, 1000) : 'NO BODY'`, &bodyHTML))
+	if err == nil {
+		log.Printf("🔍 Body HTML sample (first 1000 chars): %s", bodyHTML)
+	}
+}
+
+// findSimilarElements finds elements with similar selectors to help debug
+func (te *TestExecutor) findSimilarElements(ctx context.Context, selector string) {
+	log.Printf("🔍 Looking for similar elements to: %s", selector)
+	
+	// Extract class names from the selector
+	classNames := te.extractClassSelectors(selector)
+	for _, className := range classNames {
+		var count int
+		cleanClass := strings.TrimPrefix(className, ".")
+		chromedp.Run(ctx, chromedp.Evaluate(fmt.Sprintf(`
+			document.querySelectorAll('%s').length
+		`, className), &count))
+		log.Printf("🔍 Elements with class '%s': %d", cleanClass, count)
+		
+		if count > 0 {
+			// Get first few elements' details
+			var details string
+			chromedp.Run(ctx, chromedp.Evaluate(fmt.Sprintf(`
+				Array.from(document.querySelectorAll('%s')).slice(0, 3).map(el => 
+					el.tagName + (el.id ? '#' + el.id : '') + '.' + el.className.replace(/ /g, '.')
+				).join(' | ')
+			`, className), &details))
+			log.Printf("🔍 Sample elements: %s", details)
+		}
+	}
+}
+
+// debugCompleteFailure provides comprehensive debugging when all selectors fail
+func (te *TestExecutor) debugCompleteFailure(ctx context.Context, selectorsToTry []string) {
+	log.Printf("🚨 DEBUGGING COMPLETE SELECTOR FAILURE")
+	
+	// Get current page state
+	var readyState, loadState string
+	chromedp.Run(ctx, chromedp.Evaluate(`document.readyState`, &readyState))
+	chromedp.Run(ctx, chromedp.Evaluate(`document.querySelector('body') ? 'body-exists' : 'no-body'`, &loadState))
+	log.Printf("🔍 Page state: readyState=%s, bodyExists=%s", readyState, loadState)
+	
+	// Check for common UI framework indicators
+	var frameworks []string
+	var hasReact, hasVue, hasAngular, hasUniApp bool
+	chromedp.Run(ctx, chromedp.Evaluate(`typeof React !== 'undefined'`, &hasReact))
+	chromedp.Run(ctx, chromedp.Evaluate(`typeof Vue !== 'undefined'`, &hasVue))
+	chromedp.Run(ctx, chromedp.Evaluate(`typeof angular !== 'undefined'`, &hasAngular))
+	chromedp.Run(ctx, chromedp.Evaluate(`typeof uni !== 'undefined' || document.querySelector('[class*="uni-"]') !== null`, &hasUniApp))
+	
+	if hasReact { frameworks = append(frameworks, "React") }
+	if hasVue { frameworks = append(frameworks, "Vue") }
+	if hasAngular { frameworks = append(frameworks, "Angular") }
+	if hasUniApp { frameworks = append(frameworks, "UniApp") }
+	
+	log.Printf("🔍 Detected frameworks: %v", frameworks)
+	
+	// Try to find the closest matching elements
+	originalSelector := selectorsToTry[0]
+	log.Printf("🔍 Searching for elements similar to original selector: %s", originalSelector)
+	
+	// Get all divs with any class
+	var divCount int
+	chromedp.Run(ctx, chromedp.Evaluate(`document.querySelectorAll('div[class]').length`, &divCount))
+	log.Printf("🔍 Total divs with classes: %d", divCount)
+	
+	// Look for partial matches
+	if strings.Contains(originalSelector, "Protectthechild") {
+		var partialMatches string
+		chromedp.Run(ctx, chromedp.Evaluate(`
+			Array.from(document.querySelectorAll('div')).filter(div => 
+				div.className && (
+					div.className.includes('Protectthechild') ||
+					div.className.includes('head') ||
+					div.className.includes('edit') ||
+					div.className.includes('icon')
+				)
+			).map(div => div.className).slice(0, 10).join(' | ')
+		`, &partialMatches))
+		log.Printf("🔍 Partial class matches: %s", partialMatches)
+	}
+	
+	// Take a screenshot for manual debugging
+	screenshotPath := te.takeScreenshot(ctx, "debug_failure", 0, "selector_debug")
+	if screenshotPath != "" {
+		log.Printf("🔍 Debug screenshot saved: %s", screenshotPath)
+	}
+}
+
+// waitForPageStabilization waits for page to be fully loaded and stable
+func (te *TestExecutor) waitForPageStabilization(ctx context.Context) error {
+	// Stage 1: Wait for basic DOM
+	log.Printf("🔍 Stage 1: Waiting for basic DOM structure...")
+	err := chromedp.Run(ctx,
+		chromedp.WaitReady("body", chromedp.ByQuery),
+		chromedp.Sleep(1*time.Second),
+	)
+	if err != nil {
+		return fmt.Errorf("basic DOM not ready: %v", err)
+	}
+	
+	// Stage 2: Wait for body visibility
+	log.Printf("🔍 Stage 2: Waiting for body visibility...")
+	err = chromedp.Run(ctx, chromedp.WaitVisible("body", chromedp.ByQuery))
+	if err != nil {
+		return fmt.Errorf("body not visible: %v", err)
+	}
+	
+	// Stage 3: Wait for JavaScript frameworks and dynamic content
+	log.Printf("🔍 Stage 3: Waiting for JavaScript frameworks...")
+	time.Sleep(3 * time.Second) // Increased from 2 to 3 seconds
+	
+	// Stage 3.5: Check if we're dealing with a SPA that needs more time
+	var isSPA bool
+	chromedp.Run(ctx, chromedp.Evaluate(`
+		typeof React !== 'undefined' || 
+		typeof Vue !== 'undefined' || 
+		typeof angular !== 'undefined' || 
+		typeof uni !== 'undefined' ||
+		document.querySelector('[class*="uni-"]') !== null ||
+		document.querySelector('[data-reactroot]') !== null ||
+		document.querySelector('.v-application') !== null
+	`, &isSPA))
+	
+	if isSPA {
+		log.Printf("🔍 Stage 3.5: SPA detected, waiting additional time for components to mount...")
+		time.Sleep(2 * time.Second) // Extra wait for SPA components
+	}
+	
+	// Stage 4: Check for common loading indicators and wait for them to disappear
+	log.Printf("🔍 Stage 4: Checking for loading indicators...")
+	loadingSelectors := []string{
+		".loading", ".spinner", ".loader", "[data-loading]",
+		".loading-overlay", ".loading-spinner", ".loading-indicator",
+		"uni-loading", ".uni-loading", // UniApp specific
+	}
+	
+	for _, selector := range loadingSelectors {
+		// Wait for loading indicator to disappear (short timeout)
+		ctxShort, cancel := context.WithTimeout(ctx, 3*time.Second)
+		err := chromedp.Run(ctxShort, 
+			chromedp.WaitNotPresent(selector, chromedp.ByQuery),
+		)
+		cancel()
+		
+		if err == nil {
+			log.Printf("✅ Loading indicator %s disappeared", selector)
+		}
+		// Don't return error here, just log and continue
+	}
+	
+	// Stage 5: Final stability check - wait for network idle
+	log.Printf("🔍 Stage 5: Final stability check...")
+	time.Sleep(2 * time.Second)
+	
+	// Stage 6: Check document ready state
+	var readyState string
+	err = chromedp.Run(ctx, chromedp.Evaluate(`document.readyState`, &readyState))
+	if err == nil {
+		log.Printf("📋 Document ready state: %s", readyState)
+	}
+	
+	log.Printf("✅ Page stabilization completed")
+	return nil
 }
 
 func (te *TestExecutor) executeClickByText(ctx context.Context, selector string, step models.TestStep) error {

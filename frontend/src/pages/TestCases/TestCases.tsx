@@ -133,12 +133,12 @@ const TestCases: React.FC = () => {
     setIsExecuteModalVisible(true);
   };
 
-  const handleConfirmExecute = async (isVisual: boolean) => {
+  const handleConfirmExecute = async () => {
     if (!executingTestCase) return;
     
     try {
-      const response = await api.executeTestCase(executingTestCase.id, { is_visual: isVisual });
-      message.success(`测试执行已启动（${isVisual ? '可视化' : '后台'}模式）`);
+      const response = await api.executeTestCase(executingTestCase.id, { is_visual: true });
+      message.success('测试执行已启动（可视化模式）');
       console.log('Execution started:', response);
       setIsExecuteModalVisible(false);
       setExecutingTestCase(null);
@@ -555,10 +555,12 @@ const TestCases: React.FC = () => {
       </Drawer>
 
       <Modal
-        title="选择执行模式"
+        title="确认执行测试用例"
         open={isExecuteModalVisible}
         onCancel={() => setIsExecuteModalVisible(false)}
-        footer={null}
+        onOk={handleConfirmExecute}
+        okText="确定执行"
+        cancelText="取消"
         width={400}
       >
         {executingTestCase && (
@@ -566,34 +568,11 @@ const TestCases: React.FC = () => {
             <p style={{ marginBottom: 24 }}>
               即将执行测试用例：<strong>{executingTestCase.name}</strong>
             </p>
-            <div style={{ textAlign: 'center' }}>
-              <Space direction="vertical" size="large" style={{ width: '100%' }}>
-                <Button
-                  type="primary"
-                  size="large"
-                  style={{ width: '100%', height: '60px' }}
-                  onClick={() => handleConfirmExecute(true)}
-                >
-                  <div>
-                    <div style={{ fontSize: '16px', fontWeight: 'bold' }}>可视化执行</div>
-                    <div style={{ fontSize: '12px', color: '#666' }}>
-                      浏览器界面可见，可以观察执行过程
-                    </div>
-                  </div>
-                </Button>
-                <Button
-                  size="large"
-                  style={{ width: '100%', height: '60px' }}
-                  onClick={() => handleConfirmExecute(false)}
-                >
-                  <div>
-                    <div style={{ fontSize: '16px', fontWeight: 'bold' }}>后台执行</div>
-                    <div style={{ fontSize: '12px', color: '#666' }}>
-                      浏览器后台运行，执行速度更快
-                    </div>
-                  </div>
-                </Button>
-              </Space>
+            <div style={{ padding: '16px', backgroundColor: '#f6ffed', border: '1px solid #b7eb8f', borderRadius: '6px' }}>
+              <div style={{ fontSize: '16px', fontWeight: 'bold', color: '#52c41a', marginBottom: '8px' }}>可视化执行模式</div>
+              <div style={{ fontSize: '14px', color: '#666' }}>
+                浏览器界面可见，可以实时观察执行过程和页面交互
+              </div>
             </div>
           </div>
         )}

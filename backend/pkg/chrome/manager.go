@@ -65,6 +65,20 @@ func (cm *ChromeManager) StartChromeWithURL(executionID uint, isVisual bool, tar
 		"--disable-default-browser-check",         // Don't check if Chrome is default browser
 		"--disable-web-security",                  // Reduce security restrictions that might cause parsing issues
 		"--disable-features=VizDisplayCompositor", // Disable some features that might cause event parsing issues
+		"--disable-dev-shm-usage",                 // Overcome limited resource problems
+		"--disable-background-timer-throttling",   // Disable background timer throttling
+		"--disable-renderer-backgrounding",        // Disable renderer backgrounding
+		"--disable-backgrounding-occluded-windows", // Keep windows active
+		"--disable-ipc-flooding-protection",       // Allow high-frequency IPC
+		"--disable-javascript-harmony-shipping",   // Disable modern JS features that might support debugger
+		"--disable-v8-orinoco-incremental-marking", // Disable V8 debugging features
+		"--disable-breakpad",                      // Disable crash reporting that might interfere with debugging
+		"--disable-client-side-phishing-detection", // Disable features that might trigger debugger
+		"--disable-component-update",             // Prevent component updates that might reset settings
+		"--disable-domain-reliability",           // Disable domain reliability system
+		"--no-crash-upload",                      // Don't upload crash reports
+		"--disable-features=TranslateUI",         // Disable translate UI that might interfere
+		"--js-flags=--noexpose_debug_as_ --nodebug_compile_optimized --nobreak_on_undefined --noallow_natives_syntax --nodebug --nobreak_on_exception --nobreak_on_uncaught_exception", // Ultimate V8 debugger disable
 		"--user-data-dir=" + fmt.Sprintf("/tmp/chrome-data-%d", executionID),
 		"--no-default-browser-check", // Don't show default browser prompt
 		"--disable-sync",             // Disable sync to avoid sign-in prompts

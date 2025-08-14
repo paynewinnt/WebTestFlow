@@ -161,14 +161,14 @@ const TestSuites: React.FC = () => {
     setIsExecuteModalVisible(true);
   };
 
-  const handleConfirmExecute = async (values: any) => {
+  const handleConfirmExecute = async () => {
     if (!executingTestSuite) return;
     
     try {
       const response = await api.executeTestSuite(executingTestSuite.id, {
-        is_visual: values.is_visual,
+        is_visual: true,
       });
-      message.success('测试套件执行已启动');
+      message.success('测试套件执行已启动（可视化模式）');
       console.log('Execution started:', response);
       setIsExecuteModalVisible(false);
       setExecutingTestSuite(null);
@@ -649,19 +649,19 @@ const TestSuites: React.FC = () => {
       </Drawer>
 
       <Modal
-        title="执行测试套件"
+        title="确认执行测试套件"
         open={isExecuteModalVisible}
         onCancel={() => {
           setIsExecuteModalVisible(false);
           setExecutingTestSuite(null);
         }}
-        onOk={() => executeForm.submit()}
+        onOk={handleConfirmExecute}
         okText="开始执行"
         cancelText="取消"
         width={500}
       >
         {executingTestSuite && (
-          <div style={{ marginBottom: 16 }}>
+          <div>
             <Descriptions title="执行信息" bordered column={1} size="small">
               <Descriptions.Item label="测试套件">
                 {executingTestSuite.name}
@@ -678,38 +678,15 @@ const TestSuites: React.FC = () => {
                 {executingTestSuite.timeout_minutes} 分钟
               </Descriptions.Item>
             </Descriptions>
+            
+            <div style={{ marginTop: 16, padding: '16px', backgroundColor: '#f6ffed', border: '1px solid #b7eb8f', borderRadius: '6px' }}>
+              <div style={{ fontSize: '16px', fontWeight: 'bold', color: '#52c41a', marginBottom: '8px' }}>可视化执行模式</div>
+              <div style={{ fontSize: '14px', color: '#666' }}>
+                浏览器界面可见，可以实时观察执行过程和页面交互
+              </div>
+            </div>
           </div>
         )}
-        
-        <Form
-          form={executeForm}
-          layout="vertical"
-          onFinish={handleConfirmExecute}
-          initialValues={{
-            is_visual: false,
-          }}
-        >
-          <Form.Item
-            name="is_visual"
-            label="执行模式"
-            rules={[{ required: true, message: '请选择执行模式' }]}
-          >
-            <Select placeholder="请选择执行模式">
-              <Select.Option value={false}>
-                <Space>
-                  <Tag color="blue">后台执行</Tag>
-                  <span>在后台静默执行，不显示浏览器界面</span>
-                </Space>
-              </Select.Option>
-              <Select.Option value={true}>
-                <Space>
-                  <Tag color="green">可视化执行</Tag>
-                  <span>显示浏览器界面，可观察执行过程</span>
-                </Space>
-              </Select.Option>
-            </Select>
-          </Form.Item>
-        </Form>
       </Modal>
     </div>
   );

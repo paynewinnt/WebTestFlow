@@ -356,17 +356,13 @@ func ExecuteTestCase(c *gin.Context) {
 		return
 	}
 
-	// Parse execution options
+	// Parse execution options (force visual execution)
 	var req struct {
 		IsVisual *bool `json:"is_visual"`
 	}
 	c.ShouldBindJSON(&req)
 
-	// Default to visual execution if not specified
-	isVisual := true
-	if req.IsVisual != nil {
-		isVisual = *req.IsVisual
-	}
+	// Force visual execution only (parameter no longer needed)
 
 	var testCase models.TestCase
 	err = database.DB.Preload("Project").Preload("Environment").Preload("Device").
@@ -487,7 +483,7 @@ func ExecuteTestCase(c *gin.Context) {
 			}
 		}()
 
-		resultChan := executor.GlobalExecutor.ExecuteTestCaseWithOptions(&execution, &testCase, isVisual)
+		resultChan := executor.GlobalExecutor.ExecuteTestCaseWithOptions(&execution, &testCase)
 		result := <-resultChan
 
 		completionMutex.Lock()

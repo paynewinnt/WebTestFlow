@@ -148,7 +148,7 @@ func (r *ChromeRecorder) StartRecording(targetURL string) error {
 
 		// Step 3: Verify device emulation and inject recording script
 		chromedp.ActionFunc(func(ctx context.Context) error {
-			log.Printf("✅ ChromeDP device emulation active: %s", device.Name)
+			log.Printf("SUCCESS ChromeDP device emulation active: %s", device.Name)
 			return nil
 		}),
 		chromedp.Evaluate(getRecordingScript(), nil),
@@ -181,16 +181,72 @@ func (r *ChromeRecorder) StopRecording() error {
 
 	// Get any remaining events before stopping
 	if r.ctx != nil {
-		var allEvents []RecordStep
+		log.Printf("DEBUG StopRecording: Attempting to get all events from browser...")
+		
+		// First, check if recorder exists and get raw event count
+		var rawEventCount int
 		err := chromedp.Run(r.ctx,
+			chromedp.Evaluate(`window.autoUIRecorder ? window.autoUIRecorder.events.length : 0`, &rawEventCount),
+		)
+		if err == nil {
+			log.Printf("DEBUG Raw events in browser: %d", rawEventCount)
+		}
+		
+		var allEvents []RecordStep
+		err = chromedp.Run(r.ctx,
 			chromedp.Evaluate(`window.autoUIRecorder && window.autoUIRecorder.getAllEvents()`, &allEvents),
 		)
 
-		if err == nil && len(allEvents) > 0 {
-			// Replace steps with all events to ensure we have everything
-			r.steps = allEvents
-			log.Printf("Retrieved %d total events when stopping recording", len(allEvents))
+		if err != nil {
+			log.Printf("❌ Error getting events from browser: %v", err)
+		} else {
+			log.Printf("SUCCESS Successfully retrieved %d events from current page", len(allEvents))
 		}
+		
+		// CRITICAL FIX: Cross-domain event preservation
+		log.Printf("🔧 CROSS-DOMAIN ANALYSIS:")
+		log.Printf("🔧   WebSocket polling collected: %d events", len(r.steps))
+		log.Printf("🔧   Current page has: %d events", len(allEvents))
+		
+		// Key insight: For cross-domain scenarios, WebSocket polling is the authoritative source
+		// because it collects events from all domains during navigation
+		
+		if len(r.steps) >= len(allEvents) {
+			// WebSocket has same or more events - this is the cross-domain collection
+			log.Printf("🔧 SOLUTION: Using WebSocket-collected events (%d) as they contain cross-domain history", len(r.steps))
+			log.Printf("🔧 This preserves events from all domains during navigation")
+			// Keep r.steps as is - don't overwrite with current page events
+		} else {
+			// Current page has more events - unusual but possible if no cross-domain navigation
+			log.Printf("🔧 SOLUTION: Current page has more events, merging them")
+			// Append current page events to WebSocket events to ensure we don't lose anything
+			for _, event := range allEvents {
+				// Simple deduplication by timestamp
+				found := false
+				for _, existingEvent := range r.steps {
+					if existingEvent.Timestamp == event.Timestamp {
+						found = true
+						break
+					}
+				}
+				if !found {
+					r.steps = append(r.steps, event)
+				}
+			}
+			log.Printf("🔧 After merge: %d total events", len(r.steps))
+		}
+		
+		// Additional debug: try to get events array directly  
+		var directEvents []RecordStep
+		directErr := chromedp.Run(r.ctx,
+			chromedp.Evaluate(`window.autoUIRecorder ? window.autoUIRecorder.events : []`, &directEvents),
+		)
+		if directErr == nil {
+			log.Printf("DEBUG Direct events array length: %d", len(directEvents))
+		}
+		
+		// Final event count for user feedback
+		log.Printf("🎯 FINAL RESULT: Saving %d events to database", len(r.steps))
 	}
 
 	if r.cancel != nil {
@@ -230,288 +286,69 @@ func (r *ChromeRecorder) listenForEvents() {
 
 			var events []RecordStep
 
-			// First try to get events with enhanced error handling and filtering
+			// Get events from the recording script
 			err := chromedp.Run(r.ctx,
 				chromedp.Evaluate(`
 					(function() {
-						try {
-							if (window.autoUIRecorder && typeof window.autoUIRecorder.getEvents === 'function') {
-								const events = window.autoUIRecorder.getEvents();
-								console.log('Raw events before filtering:', events.length);
+						if (window.autoUIRecorder && typeof window.autoUIRecorder.getEvents === 'function') {
+							const rawEvents = window.autoUIRecorder.getEvents();
+							
+							// Smart filtering: only remove problematic cookiePart events, keep normal user interactions
+							const filteredEvents = [];
+							
+							for (let i = 0; i < rawEvents.length; i++) {
+								const event = rawEvents[i];
 								
-								// Ultra-aggressive multi-layer filter to completely block cookiePart
-								const filteredEvents = [];
+								// Skip if event is null/undefined
+								if (!event) continue;
 								
-								for (const event of events) {
-									try {
-										// Skip null/undefined events immediately
-										if (!event || typeof event !== 'object') {
-											continue;
-										}
-										
-										// Skip if event type is missing or invalid
-										if (!event.type || typeof event.type !== 'string') {
-											continue;
-										}
-										
-										// Multi-layer deep inspection for problematic content
-										function deepInspectForProblems(obj, depth = 0, path = '') {
-											if (depth > 5 || !obj) return false; // Prevent infinite recursion
-											
-											try {
-												// Check if this is a string and contains problematic content
-												if (typeof obj === 'string') {
-													const lowerStr = obj.toLowerCase();
-													if (lowerStr.includes('cookiepart') ||
-														lowerStr.includes('navigationreason') ||
-														lowerStr.includes('clientnavigation') ||
-														lowerStr.includes('initialframe') ||
-														lowerStr.includes('framenavigation')) {
-														console.warn('Found problematic string at path:', path, 'value:', obj.substring(0, 100));
-														return true;
-													}
-												}
-												
-												// For objects, check all properties recursively
-												if (typeof obj === 'object' && obj !== null) {
-													for (const [key, value] of Object.entries(obj)) {
-														// Check property name itself
-														if (typeof key === 'string') {
-															const lowerKey = key.toLowerCase();
-															if (lowerKey.includes('cookiepart') ||
-																lowerKey.includes('cookie') ||
-																lowerKey.includes('navigation') ||
-																lowerKey.includes('client')) {
-																console.warn('Found problematic property name:', key);
-																return true;
-															}
-														}
-														
-														// Recursively check property value
-														if (deepInspectForProblems(value, depth + 1, path + '.' + key)) {
-															return true;
-														}
-													}
-												}
-											} catch (e) {
-												console.warn('Error during deep inspection at path:', path);
-												return true; // If we can't inspect safely, assume it's problematic
-											}
-											
-											return false;
-										}
-										
-										// Layer 1: Deep object inspection
-										if (deepInspectForProblems(event, 0, 'event')) {
-											console.warn('Layer 1: Blocking event due to deep inspection failure');
-											continue;
-										}
-										
-										// Layer 2: JSON serialization test with error handling
-										let eventJson;
-										try {
-											eventJson = JSON.stringify(event);
-											if (!eventJson || eventJson === '{}' || eventJson === 'null' || eventJson.length === 0) {
-												console.warn('Layer 2: Event produces empty/null JSON');
-												continue;
-											}
-										} catch (jsonError) {
-											console.warn('Layer 2: Event cannot be JSON serialized:', jsonError.message);
-											continue;
-										}
-										
-										// Layer 3: String content analysis (case-insensitive)
-										const lowerJson = eventJson.toLowerCase();
-										const problematicPatterns = [
-											'cookiepart',
-											'cookie.*part',
-											'navigationreason',
-											'clientnavigationreason', 
-											'initialframenavigation',
-											'framenavigation',
-											'clientnavigation'
-										];
-										
-										let foundProblematic = false;
-										for (const pattern of problematicPatterns) {
-											if (lowerJson.includes(pattern)) {
-												console.warn('Layer 3: Found problematic pattern:', pattern);
-												foundProblematic = true;
-												break;
-											}
-										}
-										
-										if (foundProblematic) {
-											continue;
-										}
-										
-										// Layer 4: Size and safety checks
-										if (eventJson.length > 10000) {
-											console.warn('Layer 4: Event JSON too large:', eventJson.length, 'chars');
-											continue;
-										}
-										
-										// Layer 5: Create completely clean copy with only essential fields
-										const cleanEvent = {};
-										
-										// Only copy safe, essential properties with validation
-										if (event.type && typeof event.type === 'string' && event.type.length > 0 && event.type.length < 50) {
-											cleanEvent.type = event.type;
-										} else {
-											console.warn('Layer 5: Invalid event type, skipping');
-											continue;
-										}
-										
-										if (event.selector && typeof event.selector === 'string' && event.selector.length < 500) {
-											// Extra check: make sure selector doesn't contain problematic content
-											if (!event.selector.toLowerCase().includes('cookiepart')) {
-												cleanEvent.selector = event.selector;
-											}
-										}
-										
-										if (event.value && typeof event.value === 'string' && event.value.length < 1000) {
-											// Extra check: make sure value doesn't contain problematic content  
-											if (!event.value.toLowerCase().includes('cookiepart')) {
-												cleanEvent.value = event.value;
-											}
-										}
-										
-										if (event.coordinates && typeof event.coordinates === 'object') {
-											cleanEvent.coordinates = {
-												x: isFinite(Number(event.coordinates.x)) ? Number(event.coordinates.x) : 0,
-												y: isFinite(Number(event.coordinates.y)) ? Number(event.coordinates.y) : 0
-											};
-										}
-										
-										if (event.timestamp && isFinite(Number(event.timestamp))) {
-											cleanEvent.timestamp = Number(event.timestamp);
-										} else {
-											cleanEvent.timestamp = Date.now();
-										}
-										
-										if (event.chromedpCode && typeof event.chromedpCode === 'string' && event.chromedpCode.length < 2000) {
-											if (!event.chromedpCode.toLowerCase().includes('cookiepart')) {
-												cleanEvent.chromedpCode = event.chromedpCode;
-											}
-										}
-										
-										// Layer 6: Final validation of clean event
-										try {
-											const cleanJson = JSON.stringify(cleanEvent);
-											if (cleanJson.toLowerCase().includes('cookiepart') ||
-												cleanJson.toLowerCase().includes('navigationreason')) {
-												console.warn('Layer 6: Clean event still contains problematic content, blocking');
-												continue;
-											}
-											
-											// Success! Event passed all 6 layers of filtering
-											filteredEvents.push(cleanEvent);
-											
-										} catch (finalError) {
-											console.warn('Layer 6: Failed to validate clean event:', finalError.message);
-											continue;
-										}
-										
-									} catch (processingError) {
-										console.warn('Error in multi-layer event processing:', processingError.message);
+								try {
+									// Test if event can be JSON stringified
+									const testJson = JSON.stringify(event);
+									
+									// Only block events that contain problematic cookiePart patterns
+									if (testJson.includes('cookiePart') || 
+										testJson.includes('NavigationReason') ||
+										testJson.includes('clientNavigationReason')) {
+										console.log('Filtered cookiePart event');
 										continue;
 									}
+									
+									// Keep all normal user interaction events
+									filteredEvents.push(event);
+									
+								} catch (jsonError) {
+									// Skip events that can't be serialized
+									console.log('Skipped non-serializable event');
+									continue;
 								}
-								
-								console.log('Multi-layer filter: processed', events.length, 'raw events, passed', filteredEvents.length, 'clean events');
-								return filteredEvents;
 							}
-							return [];
-						} catch (e) {
-							if (console && console.error) console.error('Critical error in enhanced getEvents:', e);
-							return [];
+							
+							return filteredEvents;
 						}
+						return [];
 					})()
 				`, &events),
 			)
 
 			if err != nil {
-				// Check if it's a JSON parsing error
-				if strings.Contains(err.Error(), "parse error") || strings.Contains(err.Error(), "unmarshal") {
-					log.Printf("🔧 JSON parse error detected, applying aggressive cleanup: %v", err)
-					
-					// Aggressive cleanup: clear everything and reset the recorder state
-					cleanupErr := chromedp.Run(r.ctx, chromedp.Evaluate(`
-						if (window.autoUIRecorder) {
-							if (console && console.warn) console.warn('🧹 Aggressive cleanup: clearing all recording state due to persistent JSON errors');
-							
-							// Clear all events and reset all tracking
-							window.autoUIRecorder.events = [];
-							window.autoUIRecorder.sentIndex = 0;
-							window.autoUIRecorder.recentEvents.clear();
-							window.autoUIRecorder.lastScrollTime = 0;
-							window.autoUIRecorder.lastScrollTarget = null;
-							window.autoUIRecorder.lastScrollX = -1;
-							window.autoUIRecorder.lastScrollY = -1;
-							window.autoUIRecorder.userIsScrolling = false;
-							window.autoUIRecorder.lastUserInteraction = 0;
-							
-							// Force garbage collection if available
-							if (window.gc) {
-								try { window.gc(); } catch(e) {}
-							}
-							
-							if (console && console.log) console.log('✅ All recording state cleared, continuing with fresh state');
-						}
-					`, nil))
-					
-					if cleanupErr != nil {
-						log.Printf("❌ Failed to cleanup events: %v", cleanupErr)
-						// If cleanup fails, try to reinject the script completely
-						log.Printf("🔄 Attempting complete script re-injection")
-						go r.reinjectRecordingScript()
-					} else {
-						log.Printf("✅ Aggressive cleanup completed successfully")
-					}
+				// Simple cookiePart error handling
+				if strings.Contains(err.Error(), "cookiePart") || strings.Contains(err.Error(), "parse error") {
+					log.Printf("🛡️ cookiePart error detected: %v", err)
+					// Simply skip this polling cycle and continue
 					continue
 				}
 
-				log.Printf("Error getting events (possible page navigation or script missing): %v", err)
-				// Enhanced cross-domain and script missing detection
-				now := time.Now()
-				isScriptMissingError := strings.Contains(err.Error(), "autoUIRecorder") || 
-										strings.Contains(err.Error(), "undefined") ||
-										strings.Contains(err.Error(), "Cannot read properties") ||
-										strings.Contains(err.Error(), "ReferenceError")
+				log.Printf("Error getting events: %v", err)
 				
-				isCrossDomainError := strings.Contains(err.Error(), "Cannot access") ||
-									  strings.Contains(err.Error(), "cross-origin") ||
-									  strings.Contains(err.Error(), "different origin") ||
-									  strings.Contains(err.Error(), "SecurityError")
-				
-				isNavigationError := strings.Contains(err.Error(), "target navigated") ||
-									strings.Contains(err.Error(), "page navigated") ||
-									strings.Contains(err.Error(), "document unloaded")
-				
-				// Immediate re-injection for critical scenarios
-				shouldForceReinject := isScriptMissingError || isCrossDomainError || isNavigationError
-				
-				// Dynamic rate limiting based on error type
-				var rateLimitTime time.Duration
-				if shouldForceReinject {
-					rateLimitTime = 500 * time.Millisecond // Very aggressive for critical errors
-				} else {
-					rateLimitTime = 3 * time.Second // Normal rate for other errors
-				}
-				
-				if now.Sub(r.lastReinject) > rateLimitTime {
-					r.lastReinject = now
-					log.Printf("🌐 Enhanced re-injection trigger (script missing: %v, cross-domain: %v, navigation: %v)", 
-						isScriptMissingError, isCrossDomainError, isNavigationError)
-					
-					// For cross-domain issues, use enhanced re-injection
-					if isCrossDomainError || isNavigationError {
-						go r.enhancedCrossDomainReinject()
-					} else {
+				// Simple script re-injection check
+				if strings.Contains(err.Error(), "autoUIRecorder") || strings.Contains(err.Error(), "undefined") {
+					now := time.Now()
+					if now.Sub(r.lastReinject) > 2*time.Second {
+						r.lastReinject = now
+						log.Printf("🔄 Re-injecting script due to missing recorder")
 						go r.reinjectRecordingScript()
 					}
-				} else {
-					log.Printf("⏭️ Skipping reinject (too soon, last: %v ago)", now.Sub(r.lastReinject))
 				}
 				continue
 			}
@@ -565,7 +402,7 @@ func (r *ChromeRecorder) reinjectRecordingScript() {
 		)
 
 		if err == nil && recorderExists {
-			log.Printf("✅ Recording script already present and working on attempt %d", attempt)
+			log.Printf("SUCCESS Recording script already present and working on attempt %d", attempt)
 			return
 		}
 
@@ -610,7 +447,7 @@ func (r *ChromeRecorder) reinjectRecordingScript() {
 
 			// If there's a JavaScript syntax error, don't keep trying
 			if strings.Contains(err.Error(), "SyntaxError") {
-				log.Printf("🚫 JavaScript syntax error detected, stopping reinject attempts")
+				log.Printf("FILTERED JavaScript syntax error detected, stopping reinject attempts")
 				return
 			}
 			
@@ -623,7 +460,7 @@ func (r *ChromeRecorder) reinjectRecordingScript() {
 		}
 
 		// Verify the injection worked
-		log.Printf("✅ Recording script re-injected successfully (attempt %d)", attempt)
+		log.Printf("SUCCESS Recording script re-injected successfully (attempt %d)", attempt)
 		time.Sleep(300 * time.Millisecond)
 		
 		var verified bool
@@ -640,7 +477,7 @@ func (r *ChromeRecorder) reinjectRecordingScript() {
 		})()`, &verified))
 
 		if verified {
-			log.Printf("✅ Recording script injection verified successfully!")
+			log.Printf("SUCCESS Recording script injection verified successfully!")
 			
 			// Log current event count
 			var eventCount int
@@ -774,7 +611,7 @@ func (r *ChromeRecorder) enhancedCrossDomainReinject() {
 												  window.autoUIRecorder.isRecording === true);
 						
 						if (isRecorderReady) {
-							console.log('✅ Cross-domain recorder verification successful');
+							console.log('SUCCESS Cross-domain recorder verification successful');
 							console.log('📊 Current domain:', window.location.hostname);
 							console.log('📊 Current URL:', window.location.href);
 							
@@ -799,7 +636,7 @@ func (r *ChromeRecorder) enhancedCrossDomainReinject() {
 		}
 		
 		if verified {
-			log.Printf("✅ Cross-domain recorder injection successful after %d attempts", attempt)
+			log.Printf("SUCCESS Cross-domain recorder injection successful after %d attempts", attempt)
 			log.Printf("🎯 Now monitoring domain: %s", currentURL)
 			
 			// Log current event count
@@ -858,7 +695,7 @@ func (r *ChromeRecorder) setupNavigationListeners() {
 			}()
 			
 		case *page.EventLoadEventFired:
-			log.Printf("✅ CDP: Page load complete")
+			log.Printf("SUCCESS CDP: Page load complete")
 			// Page fully loaded, ensure script is present
 			go func() {
 				time.Sleep(500 * time.Millisecond)
@@ -873,7 +710,7 @@ func (r *ChromeRecorder) setupNavigationListeners() {
 						message := string(arg.Value)
 						if strings.Contains(message, "autoUIRecorder") || 
 						   strings.Contains(message, "Cross-domain") {
-							log.Printf("🔍 CDP Console: %s", message)
+							log.Printf("DEBUG CDP Console: %s", message)
 						}
 					}
 				}
@@ -890,7 +727,7 @@ func (r *ChromeRecorder) setupNavigationListeners() {
 	if err != nil {
 		log.Printf("❌ Failed to enable CDP event listeners: %v", err)
 	} else {
-		log.Printf("✅ CDP navigation listeners enabled successfully")
+		log.Printf("SUCCESS CDP navigation listeners enabled successfully")
 	}
 }
 
@@ -976,7 +813,24 @@ func (rm *RecorderManager) CleanupRecording(sessionID string) error {
 func getRecordingScript() string {
 	return `
 (function() {
-	if (window.autoUIRecorder) return;
+	try {
+		console.log('🎬 Initializing autoUIRecorder (minimal protection mode)...');
+		
+		// Check if recorder already exists and is functional
+		if (window.autoUIRecorder) {
+			console.log('🎬 autoUIRecorder already exists, checking if functional...');
+			if (typeof window.autoUIRecorder.addEvent === 'function') {
+				console.log('🎬 Existing recorder is functional, skipping re-init');
+				return;
+			} else {
+				console.log('🎬 Existing recorder is broken, reinitializing...');
+			}
+		}
+		
+		console.log('🎬 No anti-debugging protection - preserving page functionality');
+	} catch (e) {
+		console.warn('🎬 Error in recorder initialization safety checks:', e);
+	}
 	
 	window.autoUIRecorder = {
 		events: [],
@@ -1140,7 +994,6 @@ func getRecordingScript() string {
 					if (event && event.type) {
 						// Check if event has problematic content
 						if (this.hasProblematicContent(event)) {
-							console.warn('Blocking problematic event from being added:', event.type);
 							return;
 						}
 						
@@ -1148,14 +1001,12 @@ func getRecordingScript() string {
 						try {
 							JSON.stringify(event);
 						} catch (e) {
-							console.warn('Event cannot be stringified, blocking:', event.type);
 							return;
 						}
 						
 						event.chromedpCode = this.generateChromeDPCode(event);
 						this.events.push(event);
-						console.log('✅ Added event:', event.type, 'selector:', event.selector, 'total events:', this.events.length);
-						console.log('ChromeDP code:', event.chromedpCode);
+						console.log('✅ Event recorded:', event.type, 'Total events:', this.events.length);
 					}
 				} catch (e) {
 					console.warn('Failed to add event:', e);
@@ -1176,12 +1027,18 @@ func getRecordingScript() string {
 		cleanEvent: function(event) {
 			try {
 				if (!event || typeof event !== 'object') {
+					console.warn('cleanEvent: Invalid event object');
 					return null;
 				}
 				
-				// Early rejection: check for cookiePart in original event
+				// Skip empty events or events without type
+				if (!event.type || event.type.trim() === '') {
+					console.warn('cleanEvent: Event missing type');
+					return null;
+				}
+				
+				// Early rejection: check for cookiePart in original event (more precise check)
 				if (this.hasProblematicContent(event)) {
-					console.warn('Rejecting event with problematic content before cleaning');
 					return null;
 				}
 				
@@ -1195,25 +1052,45 @@ func getRecordingScript() string {
 					options: this.cleanOptions(event.options)
 				};
 				
-				// Additional validation - reject events with problematic content
-				const eventStr = JSON.stringify(cleanedEvent);
+				// Validate essential fields
+				if (!cleanedEvent.type || cleanedEvent.type.trim() === '') {
+					return null;
+				}
 				
-				// Check for problematic patterns that cause JSON parse errors
-				if (eventStr.includes('cookiePart') || 
-					eventStr.includes('NavigationReason') ||
-					eventStr.includes('ClientNavigationReason') ||
-					eventStr.includes('initialFrameNavigation') ||
-					eventStr.includes('frameNavigation') ||
-					eventStr.includes('navigationReason') ||
-					eventStr.includes('clientNavigation') ||
-					eventStr.length > 50000) { // Reject overly large events
-					console.warn('Rejecting event with problematic content after cleaning:', cleanedEvent.type);
+				// For user interaction events, require selector or coordinates
+				const interactionTypes = ['click', 'input', 'keydown', 'scroll', 'touchstart', 'touchend', 'mousedrag'];
+				if (interactionTypes.includes(cleanedEvent.type)) {
+					if (!cleanedEvent.selector && (!cleanedEvent.coordinates || Object.keys(cleanedEvent.coordinates).length === 0)) {
+						return null;
+					}
+				}
+				
+				// Final validation - check for problematic patterns after cleaning
+				try {
+					const eventStr = JSON.stringify(cleanedEvent);
+					
+					// More precise problematic pattern detection
+					const hasProblematicPattern = 
+						eventStr.includes('cookiePart') || 
+						eventStr.includes('NavigationReason') ||
+						eventStr.includes('ClientNavigationReason') ||
+						eventStr.includes('initialFrameNavigation');
+					
+					if (hasProblematicPattern) {
+						return null;
+					}
+					
+					// Check size (more lenient than before)
+					if (eventStr.length > 100000) {
+						return null;
+					}
+				} catch (jsonError) {
 					return null;
 				}
 				
 				return cleanedEvent;
 			} catch (e) {
-				console.warn('Failed to clean event, skipping:', e, event?.type || 'unknown');
+				console.warn('FILTERED cleanEvent: Exception during cleaning:', e, event?.type || 'unknown');
 				return null;
 			}
 		},
@@ -1225,23 +1102,48 @@ func getRecordingScript() string {
 			}
 			
 			try {
-				// Quick property check
+				// First, test basic JSON serialization
+				JSON.stringify(event);
+				
+				// Quick property check - be more specific about what we're looking for
 				for (const [key, value] of Object.entries(event)) {
-					if (typeof key === 'string' && (key.includes('cookiePart') || key.includes('cookie'))) {
+					// Check key names
+					if (typeof key === 'string' && key.toLowerCase().includes('cookiepart')) {
+						console.log('FILTERED hasProblematicContent: Found cookiePart in key:', key);
 						return true;
 					}
-					if (typeof value === 'string' && (value.includes('cookiePart') || value.includes('NavigationReason'))) {
-						return true;
+					
+					// Check string values more carefully
+					if (typeof value === 'string') {
+						const lowerValue = value.toLowerCase();
+						if (lowerValue.includes('cookiepart') || 
+							lowerValue.includes('navigationreason') ||
+							lowerValue.includes('clientnavigationreason')) {
+							console.log('FILTERED hasProblematicContent: Found problematic pattern in value:', value.substring(0, 50));
+							return true;
+						}
+					}
+					
+					// Check nested objects (but not too deeply)
+					if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+						try {
+							const valueStr = JSON.stringify(value);
+							if (valueStr.includes('cookiePart') || 
+								valueStr.includes('NavigationReason') ||
+								valueStr.includes('ClientNavigationReason')) {
+								console.log('FILTERED hasProblematicContent: Found problematic pattern in nested object');
+								return true;
+							}
+						} catch (nestedError) {
+							console.log('FILTERED hasProblematicContent: Cannot serialize nested object, likely problematic');
+							return true;
+						}
 					}
 				}
 				
-				// Stringify check
-				const eventStr = JSON.stringify(event);
-				return eventStr.includes('cookiePart') || 
-					   eventStr.includes('NavigationReason') ||
-					   eventStr.includes('ClientNavigationReason');
+				return false; // No problematic content found
 			} catch (e) {
-				// If we can't stringify, it's likely problematic
+				console.log('FILTERED hasProblematicContent: Cannot serialize event, treating as problematic:', e.message);
 				return true;
 			}
 		},
@@ -1387,7 +1289,20 @@ func getRecordingScript() string {
 		
 		getAllEvents: function() {
 			// Return all events (used when stopping recording)
-			return this.events.map(event => this.cleanEvent(event)).filter(event => event !== null);
+			console.log('DEBUG getAllEvents called - raw events count:', this.events.length);
+			
+			const cleanedEvents = this.events.map((event, index) => {
+				const cleaned = this.cleanEvent(event);
+				if (cleaned === null) {
+					console.warn('FILTERED Event ' + (index + 1) + '/' + this.events.length + ' filtered out:', event.type, event.selector?.substring(0, 50));
+				} else {
+					console.log('KEPT Event ' + (index + 1) + '/' + this.events.length + ' kept:', cleaned.type, cleaned.selector?.substring(0, 50));
+				}
+				return cleaned;
+			}).filter(event => event !== null);
+			
+			console.log('RESULT Final result: ' + cleanedEvents.length + ' events out of ' + this.events.length + ' raw events');
+			return cleanedEvents;
 		},
 
 		// Generate complete ChromeDP test code
@@ -1691,14 +1606,12 @@ func getRecordingScript() string {
 		}
 	}
 
+	
 	// Click events
 	document.addEventListener('click', function(event) {
-		console.log('Click detected on:', event.target.tagName, 'className:', event.target.className);
-		console.log('Event trusted:', event.isTrusted);
+		console.log('🖱️ Click detected:', event.target.tagName, event.target.className, 'Text:', event.target.textContent?.trim().substring(0, 20));
 		
-		// Minimal check - only verify event is trusted
 		if (event.isTrusted) {
-			console.log('✅ Recording click event');
 			// Mark user interaction
 			window.autoUIRecorder.markUserInteraction();
 			
@@ -1707,7 +1620,7 @@ func getRecordingScript() string {
 			
 			const selectorInfo = window.autoUIRecorder.getSelectorWithFallbacks(event.target);
 			
-			window.autoUIRecorder.addEvent({
+			const clickEvent = {
 				type: 'click',
 				selector: selectorInfo.primary,
 				coordinates: window.autoUIRecorder.getCoordinates(event),
@@ -1719,9 +1632,9 @@ func getRecordingScript() string {
 					elementText: event.target.textContent ? event.target.textContent.trim().substring(0, 100) : '',
 					tagName: event.target.tagName.toLowerCase()
 				}
-			});
+			};
 			
-			console.log('Click recorded with selector:', selectorInfo.primary, 'fallbacks:', selectorInfo.fallbacks.length);
+			window.autoUIRecorder.addEvent(clickEvent);
 			
 			// Check if click might cause navigation
 			const target = event.target;
@@ -2527,6 +2440,11 @@ func getRecordingScript() string {
 		console.log(code);
 		return code;
 	};
+	
+	// Recorder initialization complete
+	
+	console.log('🎬 ✅ AutoUIRecorder initialized successfully!');
+	
 })();
 `
 }

@@ -353,14 +353,13 @@ func ExecuteTestSuite(c *gin.Context) {
 		return
 	}
 
-	// Parse request body for execution options
+	// Parse request body for execution options (force visual execution)
 	var req struct {
 		IsVisual bool `json:"is_visual"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		// If no body provided, default to visual execution
-		req.IsVisual = true
-	}
+	c.ShouldBindJSON(&req)
+	// Force visual execution only
+	req.IsVisual = true
 
 	var testSuite models.TestSuite
 	err = database.DB.Preload("Project").
@@ -571,7 +570,7 @@ func ExecuteTestSuite(c *gin.Context) {
 				}()
 
 				// Use direct execution to avoid ChromeDP concurrency issues
-				result = executor.GlobalExecutor.ExecuteTestCaseDirectly(&execution, &testCase, req.IsVisual)
+				result = executor.GlobalExecutor.ExecuteTestCaseDirectly(&execution, &testCase)
 			}()
 
 			// Update execution with result
