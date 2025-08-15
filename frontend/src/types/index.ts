@@ -52,6 +52,8 @@ export interface TestStep {
   options: Record<string, any>;
   timestamp: number;
   screenshot?: string;
+  description?: string;
+  wait_before?: number;
 }
 
 export interface TestCase {

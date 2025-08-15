@@ -59,7 +59,9 @@ type TestStep struct {
 	Coordinates map[string]interface{} `json:"coordinates"` // x, y coordinates
 	Options     map[string]interface{} `json:"options"`     // Additional options
 	Timestamp   int64                  `json:"timestamp"`
-	Screenshot  string                 `json:"screenshot"` // Screenshot path if needed
+	Screenshot  string                 `json:"screenshot"`  // Screenshot path if needed
+	Description string                 `json:"description"` // Step description for editing
+	WaitBefore  int                    `json:"wait_before"` // Wait time before executing this step (in seconds)
 }
 
 type TestCase struct {

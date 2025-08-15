@@ -186,15 +186,15 @@ func UpdateTestCase(c *gin.Context) {
 	}
 
 	var req struct {
-		Name           string            `json:"name" binding:"omitempty,min=1,max=200"`
-		Description    string            `json:"description" binding:"max=1000"`
-		ProjectID      uint              `json:"project_id"`
-		EnvironmentID  uint              `json:"environment_id"`
-		DeviceID       uint              `json:"device_id"`
-		Steps          []models.TestStep `json:"steps"`
-		ExpectedResult string            `json:"expected_result" binding:"max=1000"`
-		Tags           string            `json:"tags" binding:"max=500"`
-		Priority       int               `json:"priority" binding:"omitempty,min=1,max=3"`
+		Name           string      `json:"name" binding:"omitempty,min=1,max=200"`
+		Description    string      `json:"description" binding:"max=1000"`
+		ProjectID      uint        `json:"project_id"`
+		EnvironmentID  uint        `json:"environment_id"`
+		DeviceID       uint        `json:"device_id"`
+		Steps          interface{} `json:"steps"` // Can be string or []models.TestStep
+		ExpectedResult string      `json:"expected_result" binding:"max=1000"`
+		Tags           string      `json:"tags" binding:"max=500"`
+		Priority       int         `json:"priority" binding:"omitempty,min=1,max=3"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -280,8 +280,20 @@ func UpdateTestCase(c *gin.Context) {
 
 	// Update steps if provided
 	if req.Steps != nil {
-		if data, err := json.Marshal(req.Steps); err == nil {
-			testCase.Steps = string(data)
+		switch v := req.Steps.(type) {
+		case string:
+			// If it's already a JSON string, use it directly
+			testCase.Steps = v
+		case []interface{}:
+			// If it's an array, marshal it to JSON
+			if data, err := json.Marshal(v); err == nil {
+				testCase.Steps = string(data)
+			}
+		default:
+			// Try to marshal whatever it is
+			if data, err := json.Marshal(req.Steps); err == nil {
+				testCase.Steps = string(data)
+			}
 		}
 	}
 
@@ -516,8 +528,13 @@ func ExecuteTestCase(c *gin.Context) {
 		if logsJSON, err := json.Marshal(result.Logs); err == nil {
 			execution.ExecutionLogs = string(logsJSON)
 		}
+		log.Printf("🔍 [DEBUG] Execution result screenshots count: %d", len(result.Screenshots))
+		log.Printf("🔍 [DEBUG] Execution result screenshots: %v", result.Screenshots)
 		if screenshotsJSON, err := json.Marshal(result.Screenshots); err == nil {
 			execution.Screenshots = string(screenshotsJSON)
+			log.Printf("🔍 [DEBUG] Screenshots JSON saved to DB: %s", string(screenshotsJSON))
+		} else {
+			log.Printf("❌ [DEBUG] Failed to marshal screenshots: %v", err)
 		}
 
 		// Save to database IMMEDIATELY - this is crucial

@@ -580,6 +580,23 @@ func (te *TestExecutor) executeTestCase(executionID uint, testCase *models.TestC
 		stepStartTime := time.Now()
 		detailedDesc := te.getDetailedStepDescription(step, i, totalSteps)
 
+		// Check if step needs wait before execution
+		if step.WaitBefore > 0 {
+			waitDuration := time.Duration(step.WaitBefore) * time.Second
+			log.Printf("⏳ 步骤 %d/%d - 等待 %d 秒后执行: %s", i+1, totalSteps, step.WaitBefore, detailedDesc)
+			result.addStepLog("info", fmt.Sprintf("等待 %d 秒后执行步骤 %d/%d", step.WaitBefore, i+1, totalSteps), i,
+				"wait", "running", "", fmt.Sprintf("%d", step.WaitBefore), "", 0, "")
+			
+			// Context-aware wait
+			select {
+			case <-time.After(waitDuration):
+				log.Printf("✅ 等待完成，开始执行步骤 %d/%d", i+1, totalSteps)
+			case <-ctx.Done():
+				result.ErrorMessage = fmt.Sprintf("步骤 %d 等待过程中被取消", i+1)
+				return result
+			}
+		}
+
 		// Enhanced step start logging
 		log.Printf("🔄 %s - 开始执行...", detailedDesc)
 		result.addStepLog("info", fmt.Sprintf("开始执行步骤 %d/%d: %s", i+1, totalSteps, detailedDesc), i,
@@ -1433,36 +1450,57 @@ func (te *TestExecutor) executeSubmit(ctx context.Context, step models.TestStep)
 }
 
 func (te *TestExecutor) takeScreenshot(ctx context.Context, stepType string, stepIndex int, testCaseName string) string {
+	log.Printf("🔍 [DEBUG] Starting takeScreenshot: stepType=%s, stepIndex=%d, testCase=%s", stepType, stepIndex, testCaseName)
+	
 	now := time.Now()
 	dateFolder := now.Format("2006-01-02")
 	timeStamp := now.Format("15:04:05")
-	filename := fmt.Sprintf("%s_%s_%d_%s.png", testCaseName, stepType, stepIndex, timeStamp)
+	
+	// Sanitize test case name for file system - replace problematic characters
+	sanitizedTestCaseName := strings.ReplaceAll(testCaseName, "/", "_")
+	sanitizedTestCaseName = strings.ReplaceAll(sanitizedTestCaseName, "\\", "_")
+	sanitizedTestCaseName = strings.ReplaceAll(sanitizedTestCaseName, ":", "_")
+	sanitizedTestCaseName = strings.ReplaceAll(sanitizedTestCaseName, "*", "_")
+	sanitizedTestCaseName = strings.ReplaceAll(sanitizedTestCaseName, "?", "_")
+	sanitizedTestCaseName = strings.ReplaceAll(sanitizedTestCaseName, "\"", "_")
+	sanitizedTestCaseName = strings.ReplaceAll(sanitizedTestCaseName, "<", "_")
+	sanitizedTestCaseName = strings.ReplaceAll(sanitizedTestCaseName, ">", "_")
+	sanitizedTestCaseName = strings.ReplaceAll(sanitizedTestCaseName, "|", "_")
+	
+	filename := fmt.Sprintf("%s_%s_%d_%s.png", sanitizedTestCaseName, stepType, stepIndex, timeStamp)
 
 	// Create daily screenshots directory if not exists
 	screenshotDir := filepath.Join("../screenshots", dateFolder)
+	log.Printf("🔍 [DEBUG] Screenshot directory: %s", screenshotDir)
+	
 	if err := os.MkdirAll(screenshotDir, 0755); err != nil {
-		log.Printf("Failed to create screenshots directory: %v", err)
+		log.Printf("❌ Failed to create screenshots directory: %v", err)
 		return ""
 	}
 
 	fullPath := filepath.Join(screenshotDir, filename)
+	log.Printf("🔍 [DEBUG] Full screenshot path: %s", fullPath)
 
 	var buf []byte
 	err := chromedp.Run(ctx, chromedp.CaptureScreenshot(&buf))
 	if err != nil {
-		log.Printf("Failed to take screenshot: %v", err)
+		log.Printf("❌ Failed to capture screenshot: %v", err)
 		return ""
 	}
+	
+	log.Printf("✅ [DEBUG] Screenshot captured successfully, buffer size: %d bytes", len(buf))
 
 	// Save screenshot to file
 	err = ioutil.WriteFile(fullPath, buf, 0644)
 	if err != nil {
-		log.Printf("Failed to save screenshot file: %v", err)
+		log.Printf("❌ Failed to save screenshot file: %v", err)
 		return ""
 	}
 
-	log.Printf("📸 Screenshot saved: %s (step %d, type: %s)", filename, stepIndex, stepType)
-	return filepath.Join(dateFolder, filename)
+	relativePath := filepath.Join(dateFolder, filename)
+	log.Printf("📸 Screenshot saved successfully: %s (step %d, type: %s)", filename, stepIndex, stepType)
+	log.Printf("🔍 [DEBUG] Returning relative path: %s", relativePath)
+	return relativePath
 }
 
 func (te *TestExecutor) shouldTakeScreenshot(step models.TestStep) bool {

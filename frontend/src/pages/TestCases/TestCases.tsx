@@ -19,6 +19,10 @@ import {
   Row,
   Col,
   Statistic,
+  List,
+  InputNumber,
+  Collapse,
+  Tooltip,
 } from 'antd';
 import dayjs from 'dayjs';
 import {
@@ -28,14 +32,197 @@ import {
   PlayCircleOutlined,
   EyeOutlined,
   ReloadOutlined,
+  SaveOutlined,
+  ClockCircleOutlined,
 } from '@ant-design/icons';
 import { api } from '../../services/api';
-import type { TestCase, Project, Environment, Device } from '../../types';
+import type { TestCase, Project, Environment, Device, TestStep } from '../../types';
 import type { ColumnsType } from 'antd/es/table';
 
 const { Title, Text } = Typography;
 const { TextArea } = Input;
 const { Option } = Select;
+const { Panel } = Collapse;
+
+// Steps Editor Component
+interface StepsEditorProps {
+  visible: boolean;
+  testCase: TestCase | null;
+  onClose: () => void;
+  onSave: (steps: any[]) => void;
+}
+
+const StepsEditor: React.FC<StepsEditorProps> = ({ visible, testCase, onClose, onSave }) => {
+  const [steps, setSteps] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (testCase && visible) {
+      try {
+        const parsedSteps = testCase.steps ? JSON.parse(testCase.steps) : [];
+        setSteps(parsedSteps);
+      } catch (error) {
+        console.error('Failed to parse steps:', error);
+        setSteps([]);
+      }
+    }
+  }, [testCase, visible]);
+
+  const handleStepUpdate = (index: number, field: string, value: any) => {
+    const newSteps = [...steps];
+    newSteps[index] = { ...newSteps[index], [field]: value };
+    setSteps(newSteps);
+  };
+
+  const handleSave = () => {
+    setLoading(true);
+    onSave(steps);
+    setLoading(false);
+  };
+
+  const getStepTypeLabel = (type: string) => {
+    const labels: Record<string, string> = {
+      click: '点击',
+      input: '输入',
+      scroll: '滚动',
+      navigate: '导航',
+      keydown: '按键',
+      touchstart: '触摸开始',
+      touchend: '触摸结束',
+      swipe: '滑动',
+      change: '变更',
+      submit: '提交',
+      back: '返回',
+    };
+    return labels[type] || type;
+  };
+
+  const getStepDescription = (step: any) => {
+    const { type, selector, value } = step;
+    switch (type) {
+      case 'click':
+        return `点击元素: ${selector}`;
+      case 'input':
+        return `输入内容: "${value}" 到 ${selector}`;
+      case 'scroll':
+        return '滚动页面';
+      case 'navigate':
+        return `导航到: ${value}`;
+      default:
+        return `${getStepTypeLabel(type)}操作`;
+    }
+  };
+
+  return (
+    <Drawer
+      title={`编辑测试步骤 - ${testCase?.name || ''}`}
+      width={800}
+      open={visible}
+      onClose={onClose}
+      extra={
+        <Button type="primary" icon={<SaveOutlined />} loading={loading} onClick={handleSave}>
+          保存
+        </Button>
+      }
+    >
+      <div style={{ marginBottom: 16 }}>
+        <Text type="secondary">
+          共 {steps.length} 个步骤，您可以为每个步骤设置执行前的等待时间
+        </Text>
+      </div>
+      
+      <Collapse ghost>
+        {steps.map((step, index) => (
+          <Panel
+            key={index}
+            header={
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+                <div style={{ flex: 1 }}>
+                  <Badge
+                    count={index + 1}
+                    style={{ backgroundColor: '#1890ff', marginRight: 8 }}
+                  />
+                  <Tag color="blue">{getStepTypeLabel(step.type)}</Tag>
+                  <Text>{getStepDescription(step)}</Text>
+                </div>
+                {step.wait_before > 0 && (
+                  <Tooltip title={`等待 ${step.wait_before} 秒`}>
+                    <ClockCircleOutlined style={{ color: '#faad14', marginLeft: 8 }} />
+                  </Tooltip>
+                )}
+              </div>
+            }
+          >
+            <div style={{ padding: '16px 0' }}>
+              <Row gutter={16}>
+                <Col span={12}>
+                  <Space direction="vertical" style={{ width: '100%' }}>
+                    <div>
+                      <label style={{ fontWeight: 'bold', marginBottom: 4, display: 'block' }}>
+                        步骤描述
+                      </label>
+                      <Input
+                        placeholder="为此步骤添加描述（可选）"
+                        value={step.description || ''}
+                        onChange={(e) => handleStepUpdate(index, 'description', e.target.value)}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ fontWeight: 'bold', marginBottom: 4, display: 'block' }}>
+                        <ClockCircleOutlined style={{ marginRight: 4 }} />
+                        执行前等待时间（秒）
+                      </label>
+                      <InputNumber
+                        min={0}
+                        max={300}
+                        value={step.wait_before || 0}
+                        onChange={(value) => handleStepUpdate(index, 'wait_before', value || 0)}
+                        placeholder="0"
+                        style={{ width: '100%' }}
+                        addonAfter="秒"
+                      />
+                      <Text type="secondary" style={{ fontSize: '12px' }}>
+                        设置大于0的值时，此步骤执行前会等待指定时间
+                      </Text>
+                    </div>
+                  </Space>
+                </Col>
+                <Col span={12}>
+                  <Space direction="vertical" style={{ width: '100%' }}>
+                    <div>
+                      <label style={{ fontWeight: 'bold', marginBottom: 4, display: 'block' }}>
+                        操作类型
+                      </label>
+                      <Input value={getStepTypeLabel(step.type)} disabled />
+                    </div>
+                    <div>
+                      <label style={{ fontWeight: 'bold', marginBottom: 4, display: 'block' }}>
+                        元素选择器
+                      </label>
+                      <Input value={step.selector || '无'} disabled />
+                    </div>
+                    <div>
+                      <label style={{ fontWeight: 'bold', marginBottom: 4, display: 'block' }}>
+                        操作值
+                      </label>
+                      <Input value={step.value || '无'} disabled />
+                    </div>
+                  </Space>
+                </Col>
+              </Row>
+            </div>
+          </Panel>
+        ))}
+      </Collapse>
+      
+      {steps.length === 0 && (
+        <div style={{ textAlign: 'center', padding: '40px 0', color: '#999' }}>
+          该测试用例暂无步骤数据
+        </div>
+      )}
+    </Drawer>
+  );
+};
 
 const TestCases: React.FC = () => {
   const [testCases, setTestCases] = useState<TestCase[]>([]);
@@ -46,9 +233,11 @@ const TestCases: React.FC = () => {
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [isDetailDrawerVisible, setIsDetailDrawerVisible] = useState(false);
   const [isExecuteModalVisible, setIsExecuteModalVisible] = useState(false);
+  const [isStepsEditorVisible, setIsStepsEditorVisible] = useState(false);
   const [editingTestCase, setEditingTestCase] = useState<TestCase | null>(null);
   const [selectedTestCase, setSelectedTestCase] = useState<TestCase | null>(null);
   const [executingTestCase, setExecutingTestCase] = useState<TestCase | null>(null);
+  const [stepsEditingTestCase, setStepsEditingTestCase] = useState<TestCase | null>(null);
   const [form] = Form.useForm();
   const [pagination, setPagination] = useState({
     current: 1,
@@ -151,6 +340,37 @@ const TestCases: React.FC = () => {
   const handleViewDetails = (testCase: TestCase) => {
     setSelectedTestCase(testCase);
     setIsDetailDrawerVisible(true);
+  };
+
+  const handleEditSteps = (testCase: TestCase) => {
+    setStepsEditingTestCase(testCase);
+    setIsStepsEditorVisible(true);
+  };
+
+  const handleStepsSave = async (steps: TestStep[]) => {
+    if (!stepsEditingTestCase) return;
+    
+    try {
+      const values = {
+        name: stepsEditingTestCase.name,
+        description: stepsEditingTestCase.description,
+        project_id: stepsEditingTestCase.project_id,
+        environment_id: stepsEditingTestCase.environment_id,
+        device_id: stepsEditingTestCase.device_id,
+        expected_result: stepsEditingTestCase.expected_result,
+        tags: stepsEditingTestCase.tags,
+        priority: stepsEditingTestCase.priority,
+        steps: JSON.stringify(steps)
+      };
+      
+      await api.updateTestCase(stepsEditingTestCase.id, values);
+      message.success('测试步骤更新成功');
+      setIsStepsEditorVisible(false);
+      loadTestCases();
+    } catch (error) {
+      console.error('Failed to update test steps:', error);
+      message.error('更新测试步骤失败');
+    }
   };
 
   const handleSave = async (values: any) => {
@@ -303,6 +523,14 @@ const TestCases: React.FC = () => {
             onClick={() => handleEdit(record)}
           >
             编辑
+          </Button>
+          <Button
+            type="link"
+            size="small"
+            icon={<EditOutlined />}
+            onClick={() => handleEditSteps(record)}
+          >
+            编辑步骤
           </Button>
           <Popconfirm
             title="确定删除这个测试用例吗？"
@@ -577,6 +805,17 @@ const TestCases: React.FC = () => {
           </div>
         )}
       </Modal>
+
+      {/* Steps Editor Drawer */}
+      <StepsEditor
+        visible={isStepsEditorVisible}
+        testCase={stepsEditingTestCase}
+        onClose={() => {
+          setIsStepsEditorVisible(false);
+          setStepsEditingTestCase(null);
+        }}
+        onSave={handleStepsSave}
+      />
     </div>
   );
 };
