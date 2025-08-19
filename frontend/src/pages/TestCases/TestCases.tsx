@@ -23,6 +23,7 @@ import {
   InputNumber,
   Collapse,
   Tooltip,
+  Dropdown,
 } from 'antd';
 import dayjs from 'dayjs';
 import {
@@ -34,6 +35,7 @@ import {
   ReloadOutlined,
   SaveOutlined,
   ClockCircleOutlined,
+  MoreOutlined,
 } from '@ant-design/icons';
 import { api } from '../../services/api';
 import type { TestCase, Project, Environment, Device, TestStep } from '../../types';
@@ -497,58 +499,78 @@ const TestCases: React.FC = () => {
     {
       title: '操作',
       key: 'action',
-      width: 200,
-      render: (_, record) => (
-        <Space size="small">
-          <Button
-            type="link"
-            size="small"
-            icon={<EyeOutlined />}
-            onClick={() => handleViewDetails(record)}
+      width: 120,
+      fixed: 'right',
+      render: (_, record) => {
+        const items = [
+          {
+            key: 'view',
+            label: '查看详情',
+            icon: <EyeOutlined />,
+          },
+          {
+            key: 'execute',
+            label: '执行测试',
+            icon: <PlayCircleOutlined />,
+          },
+          {
+            key: 'edit',
+            label: '编辑信息',
+            icon: <EditOutlined />,
+          },
+          {
+            key: 'editSteps',
+            label: '编辑步骤',
+            icon: <EditOutlined />,
+          },
+          {
+            type: 'divider' as const,
+          },
+          {
+            key: 'delete',
+            label: '删除',
+            icon: <DeleteOutlined />,
+            danger: true,
+          },
+        ];
+
+        const handleMenuClick = ({ key }: { key: string }) => {
+          switch (key) {
+            case 'view':
+              handleViewDetails(record);
+              break;
+            case 'execute':
+              handleExecute(record);
+              break;
+            case 'edit':
+              handleEdit(record);
+              break;
+            case 'editSteps':
+              handleEditSteps(record);
+              break;
+            case 'delete':
+              Modal.confirm({
+                title: '确定删除这个测试用例吗？',
+                onOk: () => handleDelete(record.id),
+                okText: '确定',
+                cancelText: '取消',
+              });
+              break;
+          }
+        };
+
+        return (
+          <Dropdown
+            menu={{ 
+              items,
+              onClick: handleMenuClick
+            }}
+            trigger={['click']}
           >
-            详情
-          </Button>
-          <Button
-            type="link"
-            size="small"
-            icon={<PlayCircleOutlined />}
-            onClick={() => handleExecute(record)}
-          >
-            执行
-          </Button>
-          <Button
-            type="link"
-            size="small"
-            icon={<EditOutlined />}
-            onClick={() => handleEdit(record)}
-          >
-            编辑
-          </Button>
-          <Button
-            type="link"
-            size="small"
-            icon={<EditOutlined />}
-            onClick={() => handleEditSteps(record)}
-          >
-            编辑步骤
-          </Button>
-          <Popconfirm
-            title="确定删除这个测试用例吗？"
-            onConfirm={() => handleDelete(record.id)}
-            okText="确定"
-            cancelText="取消"
-          >
-            <Button
-              type="link"
-              size="small"
-              danger
-              icon={<DeleteOutlined />}
-            >
-              删除
-            </Button>
-          </Popconfirm>
-        </Space>
-      ),
+            <Button type="text" icon={<MoreOutlined />} />
+          </Dropdown>
+        );
+      },
     },
   ];
 
@@ -608,6 +630,7 @@ const TestCases: React.FC = () => {
           dataSource={testCases}
           rowKey="id"
           loading={loading}
+          scroll={{ x: 1200 }}
           pagination={{
             ...pagination,
             showSizeChanger: true,

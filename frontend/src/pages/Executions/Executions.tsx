@@ -267,9 +267,7 @@ const Executions: React.FC = () => {
       key: 'environment',
       width: 100,
       render: (_, record) => (
-        <Tag>
-          {record.test_case?.environment?.name || record.test_suite?.environment?.name}
-        </Tag>
+        record.test_case?.environment?.name || record.test_suite?.environment?.name
       ),
     },
     {

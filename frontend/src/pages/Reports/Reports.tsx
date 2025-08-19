@@ -276,34 +276,55 @@ const Reports: React.FC = () => {
   const handleDownloadReport = async (execution: TestExecution) => {
     try {
       const testName = execution.test_case?.name || execution.test_suite?.name;
-      const projectName = execution.test_case?.project?.name || execution.test_suite?.project?.name;
-      const environmentName = execution.test_case?.environment?.name || execution.test_suite?.environment?.name;
       
       // Validate required fields
-      if (!testName || !projectName) {
+      if (!testName) {
         message.error('缺少必要的测试信息，无法生成报告');
         return;
       }
       
-      message.loading('正在生成测试报告...', 0);
+      message.loading('正在生成HTML测试报告...', 0);
       
-      // Generate HTML report content
-      const htmlContent = generateHTMLReport({
-        execution,
-        testName,
-        projectName,
-        environmentName,
+      // Get auth token
+      const token = localStorage.getItem('token');
+      
+      // Download HTML report from backend
+      const response = await fetch(`/api/v1/executions/${execution.id}/report/html`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
       });
       
-      // Create blob and download
-      const blob = new Blob([htmlContent], { type: 'text/html; charset=utf-8' });
+      // Check if response is successful and contains HTML
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`HTTP ${response.status}: ${errorText}`);
+      }
+      
+      // Verify content type
+      const contentType = response.headers.get('content-type');
+      if (!contentType || !contentType.includes('text/html')) {
+        console.warn('Unexpected content type:', contentType);
+      }
+      
+      // Get blob from response
+      const blob = await response.blob();
+      
+      // Verify blob size
+      if (blob.size === 0) {
+        throw new Error('HTML文件为空');
+      }
+      
+      // Create download link
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
       
-      // Generate filename with timestamp
+      // Generate filename with timestamp (use safe characters only)
       const timestamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-');
-      link.download = `测试报告-${testName}-${timestamp}.html`;
+      const safeTestName = testName.replace(/[<>:"/\\|?*]/g, '_'); // Replace unsafe characters
+      link.download = `TestReport-${safeTestName}-${timestamp}.html`;
       
       // Trigger download
       document.body.appendChild(link);
@@ -312,191 +333,15 @@ const Reports: React.FC = () => {
       window.URL.revokeObjectURL(url);
       
       message.destroy();
-      message.success('测试报告已生成，请选择保存位置');
+      message.success('HTML测试报告已生成，请选择保存位置');
       
     } catch (error) {
       message.destroy();
       console.error('Failed to generate report:', error);
-      message.error('生成报告失败');
+      message.error('生成HTML报告失败');
     }
   };
 
-  const generateHTMLReport = ({ execution, testName, projectName, environmentName }: {
-    execution: TestExecution;
-    testName: string;
-    projectName: string;
-    environmentName?: string;
-  }) => {
-    const startTime = dayjs(execution.start_time).format('YYYY/M/D HH:mm:ss');
-    const endTime = execution.end_time ? dayjs(execution.end_time).format('YYYY/M/D HH:mm:ss') : '未结束';
-    const duration = Math.round(execution.duration / 1000);
-    const status = execution.status;
-    const statusText = getStatusText(status);
-    
-    // Parse execution logs
-    let logs: any[] = [];
-    try {
-      logs = JSON.parse(execution.execution_logs || '[]');
-    } catch (e) {
-      console.warn('Failed to parse execution logs:', e);
-    }
-    
-    // Parse screenshots
-    let screenshots: string[] = [];
-    try {
-      screenshots = JSON.parse(execution.screenshots || '[]');
-    } catch (e) {
-      console.warn('Failed to parse screenshots:', e);
-    }
-
-    const successRate = execution.total_count > 0 ? 
-      Math.round((execution.passed_count / execution.total_count) * 100) : 0;
-
-    return `<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>${testName} - 测试报告</title>
-    <style>
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 40px; background-color: #f5f7fa; }
-        .container { max-width: 1200px; margin: 0 auto; background: white; padding: 40px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
-        .header { text-align: center; margin-bottom: 40px; border-bottom: 3px solid #1890ff; padding-bottom: 30px; }
-        .title { color: #1890ff; margin-bottom: 15px; font-size: 2.2em; font-weight: 600; }
-        .subtitle { color: #666; margin: 8px 0; font-size: 1.1em; }
-        .stats { display: flex; justify-content: space-around; margin: 40px 0; gap: 20px; }
-        .stat-item { text-align: center; padding: 25px; background: linear-gradient(135deg, #f8f9fa, #e9ecef); border-radius: 10px; min-width: 140px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
-        .stat-number { font-size: 2.5em; font-weight: bold; margin-bottom: 8px; }
-        .stat-label { color: #666; font-size: 1em; font-weight: 500; }
-        .passed { color: #52c41a; }
-        .failed { color: #ff4d4f; }
-        .total { color: #1890ff; }
-        .section { margin: 40px 0; }
-        .section-title { color: #1890ff; border-bottom: 2px solid #e8e8e8; padding-bottom: 15px; margin-bottom: 25px; font-size: 1.5em; font-weight: 600; }
-        .info-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; margin: 25px 0; }
-        .info-item { background: #f8f9fa; padding: 20px; border-radius: 8px; border-left: 4px solid #1890ff; }
-        .info-label { font-weight: bold; color: #666; font-size: 0.9em; margin-bottom: 8px; }
-        .info-value { font-size: 1.1em; color: #333; }
-        .status { padding: 8px 16px; border-radius: 20px; color: white; font-size: 0.9em; font-weight: 500; }
-        .status.passed { background: linear-gradient(135deg, #52c41a, #73d13d); }
-        .status.failed { background: linear-gradient(135deg, #ff4d4f, #ff7875); }
-        .status.running { background: linear-gradient(135deg, #1890ff, #40a9ff); }
-        .status.pending { background: linear-gradient(135deg, #fa8c16, #ffa940); }
-        .logs-section { margin-top: 30px; }
-        .log-item { margin: 10px 0; padding: 15px; background: #f8f9fa; border-radius: 8px; border-left: 4px solid #ddd; }
-        .log-timestamp { color: #999; font-size: 0.85em; margin-bottom: 5px; }
-        .log-message { color: #333; }
-        .log-success { border-left-color: #52c41a; }
-        .log-error { border-left-color: #ff4d4f; background: #fff2f0; }
-        .log-info { border-left-color: #1890ff; }
-        .footer { margin-top: 50px; text-align: center; color: #999; font-size: 0.9em; border-top: 1px solid #e8e8e8; padding-top: 30px; }
-        .error-section { background: #fff2f0; border: 1px solid #ffccc7; border-radius: 8px; padding: 20px; margin: 20px 0; }
-        .error-title { color: #ff4d4f; font-weight: bold; margin-bottom: 10px; }
-        @media (max-width: 768px) {
-            body { padding: 20px; }
-            .container { padding: 20px; }
-            .stats { flex-direction: column; }
-            .info-grid { grid-template-columns: 1fr; }
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1 class="title">${testName} - 测试报告</h1>
-            <div class="subtitle">项目: ${projectName}</div>
-            <div class="subtitle">生成时间: ${dayjs().format('YYYY/M/D HH:mm:ss')}</div>
-            <div class="subtitle">执行时间: ${startTime} - ${endTime}</div>
-        </div>
-
-        <div class="stats">
-            <div class="stat-item">
-                <div class="stat-number total">${execution.total_count}</div>
-                <div class="stat-label">总测试数</div>
-            </div>
-            <div class="stat-item">
-                <div class="stat-number passed">${execution.passed_count}</div>
-                <div class="stat-label">通过</div>
-            </div>
-            <div class="stat-item">
-                <div class="stat-number failed">${execution.failed_count}</div>
-                <div class="stat-label">失败</div>
-            </div>
-            <div class="stat-item">
-                <div class="stat-number">${successRate}%</div>
-                <div class="stat-label">成功率</div>
-            </div>
-        </div>
-
-        <div class="section">
-            <h2 class="section-title">执行详情</h2>
-            <div class="info-grid">
-                <div class="info-item">
-                    <div class="info-label">执行状态</div>
-                    <div class="info-value">
-                        <span class="status ${status}">${statusText}</span>
-                    </div>
-                </div>
-                <div class="info-item">
-                    <div class="info-label">执行时长</div>
-                    <div class="info-value">${duration} 秒</div>
-                </div>
-                <div class="info-item">
-                    <div class="info-label">测试环境</div>
-                    <div class="info-value">${environmentName || '未知'}</div>
-                </div>
-                <div class="info-item">
-                    <div class="info-label">执行类型</div>
-                    <div class="info-value">${execution.execution_type === 'test_case' ? '单个测试用例' : '测试套件'}</div>
-                </div>
-            </div>
-        </div>
-
-        ${execution.error_message ? `
-        <div class="error-section">
-            <div class="error-title">错误信息</div>
-            <div>${execution.error_message}</div>
-        </div>
-        ` : ''}
-
-        ${logs.length > 0 ? `
-        <div class="section">
-            <h2 class="section-title">执行日志 (${logs.length} 条)</h2>
-            <div class="logs-section">
-                ${logs.map((log: any) => `
-                    <div class="log-item ${log.level === 'error' ? 'log-error' : log.step_status === 'success' ? 'log-success' : 'log-info'}">
-                        <div class="log-timestamp">${dayjs(log.timestamp).format('YYYY/M/D HH:mm:ss')}</div>
-                        <div class="log-message">${log.message}</div>
-                        ${log.duration ? `<div style="color: #999; font-size: 0.8em; margin-top: 5px;">耗时: ${log.duration}ms</div>` : ''}
-                    </div>
-                `).join('')}
-            </div>
-        </div>
-        ` : ''}
-
-        ${screenshots.length > 0 ? `
-        <div class="section">
-            <h2 class="section-title">截图记录 (${screenshots.length} 张)</h2>
-            <div style="color: #666; font-style: italic;">
-                注意: 截图文件需要从服务器单独下载查看
-            </div>
-            <div style="margin-top: 15px;">
-                ${screenshots.map((screenshot: string, index: number) => `
-                    <div style="margin: 5px 0; padding: 8px; background: #f0f0f0; border-radius: 4px;">
-                        ${index + 1}. ${screenshot}
-                    </div>
-                `).join('')}
-            </div>
-        </div>
-        ` : ''}
-
-        <div class="footer">
-            <p>此报告由 WebTestFlow 自动生成 | 生成时间: ${dayjs().format('YYYY/M/D HH:mm:ss')}</p>
-        </div>
-    </div>
-</body>
-</html>`;
-  };
 
   const getStatusColor = (status: string) => {
     const colors: Record<string, string> = {

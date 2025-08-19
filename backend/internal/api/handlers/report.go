@@ -251,7 +251,7 @@ func ExportReport(c *gin.Context) {
 	}
 
 	// Export as HTML
-	htmlContent := generateHTMLReport(report)
+	htmlContent := generateTestReportHTML(report)
 	filename := fmt.Sprintf("test-report-%d-%s.html", report.ID, time.Now().Format("20060102-150405"))
 
 	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%s", filename))
@@ -259,7 +259,7 @@ func ExportReport(c *gin.Context) {
 	c.String(200, htmlContent)
 }
 
-func generateHTMLReport(report models.TestReport) string {
+func generateTestReportHTML(report models.TestReport) string {
 	html := fmt.Sprintf(`
 <!DOCTYPE html>
 <html lang="zh-CN">
