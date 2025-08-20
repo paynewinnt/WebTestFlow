@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -10,9 +12,12 @@ import (
 	"time"
 	"webtestflow/backend/internal/executor"
 	"webtestflow/backend/internal/models"
+	"webtestflow/backend/pkg/chrome"
 	"webtestflow/backend/pkg/database"
 	"webtestflow/backend/pkg/response"
 
+	"github.com/chromedp/cdproto/page"
+	"github.com/chromedp/chromedp"
 	"github.com/gin-gonic/gin"
 )
 
@@ -520,6 +525,149 @@ func DownloadExecutionReportHTML(c *gin.Context) {
 	
 	// Write HTML to response
 	c.Data(200, "text/html; charset=utf-8", []byte(htmlContent))
+}
+
+// DownloadExecutionReportPDF generates and downloads a PDF report for a test execution
+func DownloadExecutionReportPDF(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		response.BadRequest(c, "无效的执行记录ID")
+		return
+	}
+
+	// Get execution with all relations
+	var execution models.TestExecution
+	err = database.DB.
+		Preload("TestCase").
+		Preload("TestCase.Project").
+		Preload("TestCase.Environment").
+		Preload("TestCase.Device").
+		Preload("TestSuite").
+		Preload("TestSuite.Project").
+		Preload("TestSuite.Environment").
+		Preload("User").
+		First(&execution, id).Error
+	
+	if err != nil {
+		response.NotFound(c, "执行记录不存在")
+		return
+	}
+
+	// Generate HTML content for PDF conversion
+	htmlContent := generateHTMLReport(&execution)
+	
+	// Generate PDF from HTML using Chrome
+	pdfData, err := generatePDFFromHTML(htmlContent)
+	if err != nil {
+		response.InternalServerError(c, "生成PDF报告失败: "+err.Error())
+		return
+	}
+	
+	// Get test name for filename
+	testName := ""
+	if execution.TestCaseID != nil {
+		testName = execution.TestCase.Name
+	} else if execution.TestSuiteID != nil {
+		testName = execution.TestSuite.Name
+	}
+	
+	// Generate filename with timestamp - sanitize name for filename safety
+	timestamp := time.Now().Format("20060102-150405")
+	safeTestName := strings.ReplaceAll(testName, " ", "_")
+	safeTestName = strings.ReplaceAll(safeTestName, "/", "_")
+	safeTestName = strings.ReplaceAll(safeTestName, "\\", "_")
+	filename := fmt.Sprintf("TestReport-%s-%s.pdf", safeTestName, timestamp)
+	
+	// Set response headers for PDF download
+	c.Header("Content-Type", "application/pdf")
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
+	c.Header("Content-Length", fmt.Sprintf("%d", len(pdfData)))
+	c.Header("Cache-Control", "no-cache, no-store, must-revalidate")
+	c.Header("Pragma", "no-cache")
+	c.Header("Expires", "0")
+	
+	// Write PDF to response
+	c.Data(200, "application/pdf", pdfData)
+}
+
+// generatePDFFromHTML converts HTML content to PDF using Chrome headless mode
+func generatePDFFromHTML(htmlContent string) ([]byte, error) {
+	// Create context with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Get Chrome path using existing logic
+	chromePath := chrome.GetChromePath()
+	if chromePath == "" {
+		chromePath = chrome.GetFlatpakChromePath()
+		if chromePath == "" {
+			return nil, fmt.Errorf("Chrome executable not found")
+		}
+	}
+
+	// Launch Chrome with headless options using the correct path
+	opts := append(chromedp.DefaultExecAllocatorOptions[:],
+		chromedp.ExecPath(chromePath),
+		chromedp.Flag("headless", true),
+		chromedp.Flag("disable-gpu", true),
+		chromedp.Flag("no-sandbox", true),
+		chromedp.Flag("disable-dev-shm-usage", true),
+		chromedp.Flag("disable-web-security", true),
+		chromedp.Flag("disable-features", "VizDisplayCompositor"),
+		chromedp.Flag("run-all-compositor-stages-before-draw", true),
+		chromedp.Flag("disable-background-timer-throttling", true),
+		chromedp.Flag("disable-renderer-backgrounding", true),
+		chromedp.Flag("disable-backgrounding-occluded-windows", true),
+		chromedp.WindowSize(1920, 1080), // Set viewport size
+	)
+
+	allocCtx, allocCancel := chromedp.NewExecAllocator(ctx, opts...)
+	defer allocCancel()
+
+	// Create Chrome context
+	chromeCtx, chromeCancel := chromedp.NewContext(allocCtx)
+	defer chromeCancel()
+
+	// Create data URL from HTML using base64 encoding to avoid encoding issues
+	htmlContentEncoded := base64.StdEncoding.EncodeToString([]byte(htmlContent))
+	dataURL := "data:text/html;charset=utf-8;base64," + htmlContentEncoded
+
+	var pdfData []byte
+	
+	// Navigate to HTML content and generate PDF
+	err := chromedp.Run(chromeCtx,
+		chromedp.Navigate(dataURL),
+		chromedp.WaitReady("body", chromedp.ByQuery),
+		chromedp.Sleep(3*time.Second), // Allow more time for full rendering
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			// Configure PDF printing options - no headers/footers
+			printParams := page.PrintToPDF().
+				WithPrintBackground(true).      // Include background colors and images
+				WithMarginTop(0.5).            // Slightly larger top margin
+				WithMarginBottom(0.5).         // Slightly larger bottom margin  
+				WithMarginLeft(0.5).           // Slightly larger left margin
+				WithMarginRight(0.5).          // Slightly larger right margin
+				WithPaperWidth(8.27).          // A4 width in inches
+				WithPaperHeight(11.69).        // A4 height in inches (more precise)
+				WithDisplayHeaderFooter(false).// No headers/footers
+				WithPreferCSSPageSize(false).  // Use our paper size
+				WithScale(1.0)                 // Full scale
+
+			var err error
+			pdfData, _, err = printParams.Do(ctx)
+			return err
+		}),
+	)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate PDF: %w", err)
+	}
+
+	if len(pdfData) == 0 {
+		return nil, fmt.Errorf("generated PDF is empty")
+	}
+
+	return pdfData, nil
 }
 
 // getServerBaseURL returns the base URL for the server using actual IP

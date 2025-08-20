@@ -20,6 +20,7 @@ import {
   DatePicker,
   Select,
   Empty,
+  Dropdown,
 } from 'antd';
 import {
   EyeOutlined,
@@ -28,6 +29,8 @@ import {
   CheckCircleOutlined,
   CloseCircleOutlined,
   ClockCircleOutlined,
+  FileTextOutlined,
+  FilePdfOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { api } from '../../services/api';
@@ -273,7 +276,7 @@ const Reports: React.FC = () => {
     setExecutionScreenshots([]);
   };
 
-  const handleDownloadReport = async (execution: TestExecution) => {
+  const handleDownloadReport = async (execution: TestExecution, format: 'html' | 'pdf' = 'html') => {
     try {
       const testName = execution.test_case?.name || execution.test_suite?.name;
       
@@ -283,20 +286,21 @@ const Reports: React.FC = () => {
         return;
       }
       
-      message.loading('正在生成HTML测试报告...', 0);
+      const formatName = format === 'pdf' ? 'PDF' : 'HTML';
+      message.loading(`正在生成${formatName}测试报告...`, 0);
       
       // Get auth token
       const token = localStorage.getItem('token');
       
-      // Download HTML report from backend
-      const response = await fetch(`/api/v1/executions/${execution.id}/report/html`, {
+      // Download report from backend
+      const response = await fetch(`/api/v1/executions/${execution.id}/report/${format}`, {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${token}`,
         },
       });
       
-      // Check if response is successful and contains HTML
+      // Check if response is successful
       if (!response.ok) {
         const errorText = await response.text();
         throw new Error(`HTTP ${response.status}: ${errorText}`);
@@ -304,7 +308,8 @@ const Reports: React.FC = () => {
       
       // Verify content type
       const contentType = response.headers.get('content-type');
-      if (!contentType || !contentType.includes('text/html')) {
+      const expectedContentType = format === 'pdf' ? 'application/pdf' : 'text/html';
+      if (!contentType || !contentType.includes(expectedContentType)) {
         console.warn('Unexpected content type:', contentType);
       }
       
@@ -313,7 +318,7 @@ const Reports: React.FC = () => {
       
       // Verify blob size
       if (blob.size === 0) {
-        throw new Error('HTML文件为空');
+        throw new Error(`${formatName}文件为空`);
       }
       
       // Create download link
@@ -324,7 +329,8 @@ const Reports: React.FC = () => {
       // Generate filename with timestamp (use safe characters only)
       const timestamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-');
       const safeTestName = testName.replace(/[<>:"/\\|?*]/g, '_'); // Replace unsafe characters
-      link.download = `TestReport-${safeTestName}-${timestamp}.html`;
+      const extension = format === 'pdf' ? 'pdf' : 'html';
+      link.download = `TestReport-${safeTestName}-${timestamp}.${extension}`;
       
       // Trigger download
       document.body.appendChild(link);
@@ -333,12 +339,12 @@ const Reports: React.FC = () => {
       window.URL.revokeObjectURL(url);
       
       message.destroy();
-      message.success('HTML测试报告已生成，请选择保存位置');
+      message.success(`${formatName}测试报告已生成，请选择保存位置`);
       
     } catch (error) {
       message.destroy();
       console.error('Failed to generate report:', error);
-      message.error('生成HTML报告失败');
+      message.error(`生成${format === 'pdf' ? 'PDF' : 'HTML'}报告失败`);
     }
   };
 
@@ -462,28 +468,50 @@ const Reports: React.FC = () => {
     {
       title: '操作',
       key: 'action',
-      width: 150,
-      render: (_, record) => (
-        <Space size="small">
-          <Button
-            type="link"
-            size="small"
-            icon={<EyeOutlined />}
-            onClick={() => handleViewDetails(record)}
-          >
-            详情
-          </Button>
-          <Button
-            type="link"
-            size="small"
-            icon={<DownloadOutlined />}
-            onClick={() => handleDownloadReport(record)}
-            disabled={record.status !== 'passed' && record.status !== 'failed'}
-          >
-            报告
-          </Button>
-        </Space>
-      ),
+      width: 200,
+      render: (_, record) => {
+        const reportMenuItems = [
+          {
+            key: 'html',
+            label: 'HTML报告',
+            icon: <FileTextOutlined />,
+            onClick: () => handleDownloadReport(record, 'html'),
+          },
+          {
+            key: 'pdf',
+            label: 'PDF报告',
+            icon: <FilePdfOutlined />,
+            onClick: () => handleDownloadReport(record, 'pdf'),
+          },
+        ];
+
+        return (
+          <Space size="small">
+            <Button
+              type="link"
+              size="small"
+              icon={<EyeOutlined />}
+              onClick={() => handleViewDetails(record)}
+            >
+              详情
+            </Button>
+            <Dropdown
+              menu={{ items: reportMenuItems }}
+              placement="bottomRight"
+              disabled={record.status !== 'passed' && record.status !== 'failed'}
+            >
+              <Button
+                type="link"
+                size="small"
+                icon={<DownloadOutlined />}
+                disabled={record.status !== 'passed' && record.status !== 'failed'}
+              >
+                导出报告
+              </Button>
+            </Dropdown>
+          </Space>
+        );
+      },
     },
   ];
 

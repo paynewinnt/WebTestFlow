@@ -113,6 +113,7 @@ func SetupRoutes(cfg *config.Config) *gin.Engine {
 				executions.GET("/:id/screenshots", handlers.GetExecutionScreenshots)
 				executions.GET("/:id/batch", handlers.GetCurrentBatchExecutions)
 				executions.GET("/:id/report/html", handlers.DownloadExecutionReportHTML)
+				executions.GET("/:id/report/pdf", handlers.DownloadExecutionReportPDF)
 			}
 
 			// Test reports
