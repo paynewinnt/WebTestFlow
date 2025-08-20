@@ -63,6 +63,7 @@ type TestStep struct {
 	Screenshot  string                 `json:"screenshot"`  // Screenshot path if needed
 	Description string                 `json:"description"` // Step description for editing
 	WaitBefore  int                    `json:"wait_before"` // Wait time before executing this step (in seconds)
+	SkipStep    bool                   `json:"skip_step"`   // Whether to skip this step during execution
 }
 
 type TestCase struct {

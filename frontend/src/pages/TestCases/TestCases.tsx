@@ -24,6 +24,7 @@ import {
   Collapse,
   Tooltip,
   Dropdown,
+  Switch,
 } from 'antd';
 import dayjs from 'dayjs';
 import {
@@ -36,6 +37,7 @@ import {
   SaveOutlined,
   ClockCircleOutlined,
   MoreOutlined,
+  StopOutlined,
 } from '@ant-design/icons';
 import { api } from '../../services/api';
 import type { TestCase, Project, Environment, Device, TestStep } from '../../types';
@@ -129,7 +131,7 @@ const StepsEditor: React.FC<StepsEditorProps> = ({ visible, testCase, onClose, o
     >
       <div style={{ marginBottom: 16 }}>
         <Text type="secondary">
-          共 {steps.length} 个步骤，您可以为每个步骤设置执行前的等待时间
+          共 {steps.length} 个步骤，您可以为每个步骤设置执行前的等待时间和是否跳过该步骤
         </Text>
       </div>
       
@@ -147,11 +149,18 @@ const StepsEditor: React.FC<StepsEditorProps> = ({ visible, testCase, onClose, o
                   <Tag color="blue">{getStepTypeLabel(step.type)}</Tag>
                   <Text>{getStepDescription(step)}</Text>
                 </div>
-                {step.wait_before > 0 && (
-                  <Tooltip title={`等待 ${step.wait_before} 秒`}>
-                    <ClockCircleOutlined style={{ color: '#faad14', marginLeft: 8 }} />
-                  </Tooltip>
-                )}
+                <Space>
+                  {step.wait_before > 0 && (
+                    <Tooltip title={`等待 ${step.wait_before} 秒`}>
+                      <ClockCircleOutlined style={{ color: '#faad14' }} />
+                    </Tooltip>
+                  )}
+                  {step.skip_step && (
+                    <Tooltip title="此步骤将被跳过">
+                      <StopOutlined style={{ color: '#ff4d4f' }} />
+                    </Tooltip>
+                  )}
+                </Space>
               </div>
             }
           >
@@ -185,6 +194,21 @@ const StepsEditor: React.FC<StepsEditorProps> = ({ visible, testCase, onClose, o
                       />
                       <Text type="secondary" style={{ fontSize: '12px' }}>
                         设置大于0的值时，此步骤执行前会等待指定时间
+                      </Text>
+                    </div>
+                    <div>
+                      <label style={{ fontWeight: 'bold', marginBottom: 4, display: 'block' }}>
+                        <StopOutlined style={{ marginRight: 4 }} />
+                        跳过此步骤
+                      </label>
+                      <Switch
+                        checked={step.skip_step || false}
+                        onChange={(checked) => handleStepUpdate(index, 'skip_step', checked)}
+                        checkedChildren="跳过"
+                        unCheckedChildren="执行"
+                      />
+                      <Text type="secondary" style={{ fontSize: '12px', display: 'block', marginTop: 4 }}>
+                        开启后，执行测试时将跳过此步骤
                       </Text>
                     </div>
                   </Space>

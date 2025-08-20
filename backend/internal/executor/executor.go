@@ -579,6 +579,14 @@ func (te *TestExecutor) executeTestCase(executionID uint, testCase *models.TestC
 	for i, step := range steps {
 		stepStartTime := time.Now()
 		detailedDesc := te.getDetailedStepDescription(step, i, totalSteps)
+		
+		// Check if step should be skipped
+		if step.SkipStep {
+			log.Printf("⏭️ 步骤 %d/%d - 已跳过: %s", i+1, totalSteps, detailedDesc)
+			result.addStepLog("info", fmt.Sprintf("步骤 %d/%d 已跳过: %s", i+1, totalSteps, detailedDesc), i,
+				step.Type, "skipped", step.Selector, step.Value, "", 0, "")
+			continue
+		}
 
 		// Check if step needs wait before execution
 		if step.WaitBefore > 0 {

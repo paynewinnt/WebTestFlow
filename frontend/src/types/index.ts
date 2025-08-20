@@ -54,6 +54,7 @@ export interface TestStep {
   screenshot?: string;
   description?: string;
   wait_before?: number;
+  skip_step?: boolean;
 }
 
 export interface TestCase {
