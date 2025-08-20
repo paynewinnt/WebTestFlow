@@ -451,9 +451,27 @@ const TestCases: React.FC = () => {
     },
     {
       title: '环境',
-      dataIndex: ['environment', 'name'],
       key: 'environment',
-      width: 100,
+      width: 120,
+      render: (_, record) => {
+        if (record.environment?.name) {
+          return (
+            <Tag 
+              color="blue" 
+              style={{ 
+                whiteSpace: 'normal',
+                wordBreak: 'break-word',
+                height: 'auto',
+                padding: '4px 8px',
+                lineHeight: '1.2'
+              }}
+            >
+              {record.environment.name}
+            </Tag>
+          );
+        }
+        return <Tag color="gray">未设置</Tag>;
+      },
     },
     {
       title: '设备',
@@ -765,7 +783,20 @@ const TestCases: React.FC = () => {
                 {selectedTestCase.project?.name}
               </Descriptions.Item>
               <Descriptions.Item label="测试环境">
-                {selectedTestCase.environment?.name} ({selectedTestCase.environment?.type})
+                <Tag 
+                  color="blue"
+                  style={{ 
+                    whiteSpace: 'normal',
+                    wordBreak: 'break-word',
+                    height: 'auto',
+                    padding: '4px 8px',
+                    lineHeight: '1.2',
+                    display: 'inline-block',
+                    maxWidth: '200px'
+                  }}
+                >
+                  {selectedTestCase.environment?.name} ({selectedTestCase.environment?.type})
+                </Tag>
               </Descriptions.Item>
               <Descriptions.Item label="测试设备">
                 {selectedTestCase.device?.name} ({selectedTestCase.device?.width}x{selectedTestCase.device?.height})

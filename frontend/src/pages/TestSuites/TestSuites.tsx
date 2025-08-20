@@ -252,9 +252,32 @@ const TestSuites: React.FC = () => {
     },
     {
       title: '环境',
-      dataIndex: ['environment', 'name'],
       key: 'environment',
-      width: 100,
+      width: 120,
+      render: (record: TestSuite) => {
+        const tagStyle = {
+          whiteSpace: 'normal' as const,
+          wordBreak: 'break-word' as const,
+          height: 'auto',
+          padding: '4px 8px',
+          lineHeight: '1.2',
+          display: 'inline-block',
+          maxWidth: '150px'
+        };
+
+        // Use environment_info if available, fallback to old logic
+        if (record.environment_info) {
+          const { type, summary } = record.environment_info;
+          const color = type === 'single' ? 'blue' : type === 'multiple' ? 'orange' : 'gray';
+          return <Tag color={color} style={tagStyle}>{summary}</Tag>;
+        }
+        // Fallback for backward compatibility
+        return record.environment?.name ? (
+          <Tag color="blue" style={tagStyle}>{record.environment.name}</Tag>
+        ) : (
+          <Tag color="gray" style={tagStyle}>未设置</Tag>
+        );
+      },
     },
     {
       title: '测试用例数',
@@ -485,10 +508,10 @@ const TestSuites: React.FC = () => {
             <Col span={12}>
               <Form.Item
                 name="environment_id"
-                label="测试环境"
-                rules={[{ required: true, message: '请选择环境' }]}
+                label="默认环境"
+                help="可选，套件中的测试用例将使用各自的环境设置"
               >
-                <Select placeholder="请选择环境">
+                <Select placeholder="请选择默认环境（可不选）" allowClear>
                   {environments.map(env => (
                     <Option key={env.id} value={env.id}>
                       {env.name} ({env.type})
@@ -586,8 +609,28 @@ const TestSuites: React.FC = () => {
               <Descriptions.Item label="所属项目">
                 {selectedTestSuite.project?.name}
               </Descriptions.Item>
-              <Descriptions.Item label="测试环境">
-                {selectedTestSuite.environment?.name} ({selectedTestSuite.environment?.type})
+              <Descriptions.Item label="环境信息">
+                {selectedTestSuite.environment_info ? (
+                  <div>
+                    <Tag color={selectedTestSuite.environment_info.type === 'single' ? 'blue' : 
+                                selectedTestSuite.environment_info.type === 'multiple' ? 'orange' : 'gray'}>
+                      {selectedTestSuite.environment_info.summary}
+                    </Tag>
+                    {selectedTestSuite.environment_info.type === 'multiple' && (
+                      <div style={{ marginTop: 8 }}>
+                        {selectedTestSuite.environment_info.environments.map(env => (
+                          <Tag key={env.id} color="blue" style={{ marginTop: 4 }}>
+                            {env.name} ({env.type})
+                          </Tag>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  selectedTestSuite.environment?.name ? 
+                    `${selectedTestSuite.environment.name} (${selectedTestSuite.environment.type})` : 
+                    '未设置环境'
+                )}
               </Descriptions.Item>
               <Descriptions.Item label="执行方式">
                 <Tag color={selectedTestSuite.is_parallel ? 'green' : 'blue'}>
@@ -623,26 +666,71 @@ const TestSuites: React.FC = () => {
 
             <div style={{ marginTop: 24 }}>
               <Title level={4}>包含的测试用例</Title>
-              <List
-                dataSource={selectedTestSuite.test_cases || []}
-                renderItem={(testCase: TestCase, index) => (
-                  <List.Item>
-                    <List.Item.Meta
-                      avatar={<Badge count={index + 1} style={{ backgroundColor: '#1890ff' }} />}
-                      title={testCase.name}
-                      description={
-                        <Space>
-                          <Tag>{testCase.project?.name}</Tag>
-                          <Tag>{testCase.environment?.name}</Tag>
-                          <Tag color={getPriorityColor(testCase.priority)}>
-                            {getPriorityText(testCase.priority)}
-                          </Tag>
-                        </Space>
-                      }
-                    />
-                  </List.Item>
-                )}
-              />
+              {selectedTestSuite.environment_info?.type === 'multiple' ? (
+                // Group by environment for multiple environments
+                (() => {
+                  const groupedByEnv = (selectedTestSuite.test_cases || []).reduce((acc, testCase) => {
+                    const envName = testCase.environment?.name || '未知环境';
+                    if (!acc[envName]) acc[envName] = [];
+                    acc[envName].push(testCase);
+                    return acc;
+                  }, {} as Record<string, TestCase[]>);
+
+                  return Object.entries(groupedByEnv).map(([envName, testCases]) => (
+                    <div key={envName} style={{ marginBottom: 16 }}>
+                      <div style={{ 
+                        padding: '8px 12px', 
+                        backgroundColor: '#f0f9ff', 
+                        borderLeft: '4px solid #1890ff',
+                        marginBottom: 8 
+                      }}>
+                        <Text strong>{envName} ({testCases.length}个用例)</Text>
+                      </div>
+                      <List
+                        dataSource={testCases}
+                        renderItem={(testCase: TestCase, index) => (
+                          <List.Item style={{ paddingLeft: 16 }}>
+                            <List.Item.Meta
+                              avatar={<Badge count={index + 1} style={{ backgroundColor: '#52c41a' }} />}
+                              title={testCase.name}
+                              description={
+                                <Space>
+                                  <Tag>{testCase.project?.name}</Tag>
+                                  <Tag color={getPriorityColor(testCase.priority)}>
+                                    {getPriorityText(testCase.priority)}
+                                  </Tag>
+                                </Space>
+                              }
+                            />
+                          </List.Item>
+                        )}
+                      />
+                    </div>
+                  ));
+                })()
+              ) : (
+                // Standard list for single environment or empty
+                <List
+                  dataSource={selectedTestSuite.test_cases || []}
+                  renderItem={(testCase: TestCase, index) => (
+                    <List.Item>
+                      <List.Item.Meta
+                        avatar={<Badge count={index + 1} style={{ backgroundColor: '#1890ff' }} />}
+                        title={testCase.name}
+                        description={
+                          <Space>
+                            <Tag>{testCase.project?.name}</Tag>
+                            <Tag>{testCase.environment?.name}</Tag>
+                            <Tag color={getPriorityColor(testCase.priority)}>
+                              {getPriorityText(testCase.priority)}
+                            </Tag>
+                          </Space>
+                        }
+                      />
+                    </List.Item>
+                  )}
+                />
+              )}
             </div>
           </div>
         )}

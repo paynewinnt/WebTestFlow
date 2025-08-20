@@ -77,14 +77,22 @@ export interface TestCase {
   updated_at: string;
 }
 
+export interface EnvironmentInfo {
+  type: 'single' | 'multiple' | 'empty';
+  environments: Environment[];
+  summary: string;
+  count: number;
+}
+
 export interface TestSuite {
   id: number;
   name: string;
   description: string;
   project_id: number;
   project: Project;
-  environment_id: number;
-  environment: Environment;
+  environment_id?: number; // Made optional
+  environment?: Environment; // Made optional
+  environment_info?: EnvironmentInfo; // New field for environment analysis
   test_cases: TestCase[];
   test_case_count: number;
   schedule: string;

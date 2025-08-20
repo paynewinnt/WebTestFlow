@@ -48,6 +48,7 @@ func GetExecutions(c *gin.Context) {
 	offset := (page - 1) * pageSize
 	err := query.Preload("TestCase").Preload("TestCase.Environment").Preload("TestCase.Project").
 		Preload("TestSuite").Preload("TestSuite.Environment").Preload("TestSuite.Project").
+		Preload("TestSuite.TestCases").Preload("TestSuite.TestCases.Environment").
 		Preload("User").
 		Order("created_at DESC").
 		Offset(offset).Limit(pageSize).Find(&executions).Error
@@ -56,9 +57,13 @@ func GetExecutions(c *gin.Context) {
 		return
 	}
 
-	// Clear user passwords
+	// Clear user passwords and calculate environment info for test suites
 	for i := range executions {
 		executions[i].User.Password = ""
+		// Calculate environment info for test suite executions
+		if executions[i].ExecutionType == "test_suite" && executions[i].TestSuite.ID != 0 {
+			executions[i].TestSuite.EnvironmentInfo = executions[i].TestSuite.GetEnvironmentInfo()
+		}
 	}
 
 	response.Page(c, executions, total, page, pageSize)
@@ -199,7 +204,9 @@ func GetExecution(c *gin.Context) {
 	var execution models.TestExecution
 	err = database.DB.Preload("TestCase").Preload("TestCase.Project").
 		Preload("TestCase.Environment").Preload("TestCase.Device").
-		Preload("TestSuite").Preload("User").
+		Preload("TestSuite").Preload("TestSuite.Environment").Preload("TestSuite.Project").
+		Preload("TestSuite.TestCases").Preload("TestSuite.TestCases.Environment").
+		Preload("User").
 		First(&execution, id).Error
 	if err != nil {
 		response.NotFound(c, "执行记录不存在")
@@ -207,6 +214,10 @@ func GetExecution(c *gin.Context) {
 	}
 
 	execution.User.Password = ""
+	// Calculate environment info for test suite executions
+	if execution.ExecutionType == "test_suite" && execution.TestSuite.ID != 0 {
+		execution.TestSuite.EnvironmentInfo = execution.TestSuite.GetEnvironmentInfo()
+	}
 	response.Success(c, execution)
 }
 

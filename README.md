@@ -190,7 +190,7 @@ GET  /api/v1/ws/recording           # WebSocket录制连接
 
 ### 报告导出
 ```
-GET /api/v1/executions/:id/report/html  # 导出HTML格式报告
+GET /api/v1/executions/:id/report/html  # 导出HTML格式报告  
 GET /api/v1/executions/:id/report/pdf   # 导出PDF格式报告
 ```
 

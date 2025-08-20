@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Card, Row, Col, Statistic, Table, Tag, Progress, Space, Typography } from 'antd';
+import { Card, Row, Col, Statistic, Table, Tag, Progress, Space, Typography, Empty, Button } from 'antd';
 import dayjs from 'dayjs';
 import {
   ProjectOutlined,
@@ -7,6 +7,7 @@ import {
   CheckCircleOutlined,
   PlayCircleOutlined,
   BarChartOutlined,
+  PlusOutlined,
 } from '@ant-design/icons';
 import { api } from '../../services/api';
 import type { TestExecution, TestReport } from '../../types';
@@ -48,7 +49,16 @@ const Dashboard: React.FC = () => {
       });
 
       setRecentExecutions(executionsData.list);
-      setRecentReports(reportsData.list);
+      // 如果没有报告数据，显示空数组
+      setRecentReports(reportsData.list || []);
+      
+      console.log('Dashboard data loaded:', {
+        projects: projectsData.total,
+        testCases: testCasesData.total,
+        executions: executionsData.total,
+        reports: reportsData.total,
+        reportsCount: reportsData.list?.length || 0
+      });
     } catch (error) {
       console.error('Failed to load dashboard data:', error);
     } finally {
@@ -93,7 +103,14 @@ const Dashboard: React.FC = () => {
       title: '测试用例',
       dataIndex: ['test_case', 'name'],
       key: 'test_case_name',
-      render: (text: string) => text || '未知用例',
+      render: (text: string, record: TestExecution) => {
+        // 如果是测试套件执行，显示套件名称
+        if (record.execution_type === 'test_suite' && record.test_suite?.name) {
+          return `${record.test_suite.name} (测试套件)`;
+        }
+        // 否则显示测试用例名称
+        return text || '未知用例';
+      },
     },
     {
       title: '状态',
@@ -279,14 +296,40 @@ const Dashboard: React.FC = () => {
             }
             loading={loading}
           >
-            <Table
-              dataSource={recentReports}
-              columns={reportColumns}
-              pagination={false}
-              size="small"
-              rowKey="id"
-              scroll={{ x: true }}
-            />
+            {recentReports.length > 0 ? (
+              <Table
+                dataSource={recentReports}
+                columns={reportColumns}
+                pagination={false}
+                size="small"
+                rowKey="id"
+                scroll={{ x: true }}
+              />
+            ) : (
+              <Empty
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+                description={
+                  <span>
+                    暂无测试报告<br />
+                    <span style={{ color: '#999', fontSize: '12px' }}>
+                      执行测试后，到"测试报告"页面手动创建报告
+                    </span>
+                  </span>
+                }
+              >
+                <Button 
+                  type="primary" 
+                  icon={<PlusOutlined />} 
+                  onClick={() => {
+                    // 使用当前页面的路由跳转方式
+                    const href = window.location.origin + '/reports';
+                    window.open(href, '_self');
+                  }}
+                >
+                  前往创建报告
+                </Button>
+              </Empty>
+            )}
           </Card>
         </Col>
       </Row>

@@ -2,6 +2,7 @@ package models
 
 import (
 	"encoding/json"
+	"fmt"
 	"gorm.io/gorm"
 	"time"
 )
@@ -98,10 +99,11 @@ type TestSuite struct {
 	Description    string      `json:"description" gorm:"size:1000"`
 	ProjectID      uint        `json:"project_id" gorm:"not null"`
 	Project        Project     `json:"project" gorm:"foreignKey:ProjectID"`
-	EnvironmentID  uint        `json:"environment_id" gorm:"not null"`
+	EnvironmentID  *uint       `json:"environment_id"`              // Made optional (nullable)
 	Environment    Environment `json:"environment" gorm:"foreignKey:EnvironmentID"`
 	TestCases      []TestCase  `json:"test_cases" gorm:"many2many:test_suite_cases;"`
 	TestCaseCount  int         `json:"test_case_count" gorm:"-"`        // Virtual field for count
+	EnvironmentInfo EnvironmentInfo `json:"environment_info" gorm:"-"` // Virtual field for environment analysis
 	CronExpression string      `json:"cron_expression" gorm:"size:100"` // New cron field
 	IsParallel     bool        `json:"is_parallel" gorm:"default:false"`
 	TimeoutMinutes int         `json:"timeout_minutes" gorm:"default:60"`
@@ -110,6 +112,49 @@ type TestSuite struct {
 	Status         int         `json:"status" gorm:"default:1"`
 	UserID         uint        `json:"user_id" gorm:"not null"`
 	User           User        `json:"user" gorm:"foreignKey:UserID"`
+}
+
+type EnvironmentInfo struct {
+	Type         string        `json:"type"`         // "single", "multiple", "empty"
+	Environments []Environment `json:"environments"` // 包含的环境列表
+	Summary      string        `json:"summary"`      // "生产环境" 或 "混合环境(3个)"
+	Count        int           `json:"count"`        // 环境数量
+}
+
+// GetEnvironmentInfo 计算测试套件的环境信息
+func (ts *TestSuite) GetEnvironmentInfo() EnvironmentInfo {
+	envMap := make(map[uint]Environment)
+	
+	// 收集所有测试用例的环境
+	for _, testCase := range ts.TestCases {
+		if testCase.Environment.ID != 0 {
+			envMap[testCase.Environment.ID] = testCase.Environment
+		}
+	}
+	
+	envs := make([]Environment, 0, len(envMap))
+	for _, env := range envMap {
+		envs = append(envs, env)
+	}
+	
+	info := EnvironmentInfo{
+		Environments: envs,
+		Count:        len(envs),
+	}
+	
+	switch len(envs) {
+	case 0:
+		info.Type = "empty"
+		info.Summary = "无环境"
+	case 1:
+		info.Type = "single"
+		info.Summary = envs[0].Name
+	default:
+		info.Type = "multiple"
+		info.Summary = fmt.Sprintf("混合环境(%d个)", len(envs))
+	}
+	
+	return info
 }
 
 type TestExecution struct {

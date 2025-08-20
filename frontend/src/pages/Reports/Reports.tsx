@@ -417,10 +417,37 @@ const Reports: React.FC = () => {
     {
       title: '环境',
       key: 'environment',
-      width: 100,
-      render: (_, record) => (
-        record.test_case?.environment?.name || record.test_suite?.environment?.name
-      ),
+      width: 120,
+      render: (_, record) => {
+        const tagStyle = {
+          whiteSpace: 'normal' as const,
+          wordBreak: 'break-word' as const,
+          height: 'auto',
+          padding: '4px 8px',
+          lineHeight: '1.2',
+          display: 'inline-block',
+          maxWidth: '150px'
+        };
+
+        // 如果是测试用例执行，显示用例的环境
+        if (record.execution_type === 'test_case' && record.test_case?.environment?.name) {
+          return <Tag color="blue" style={tagStyle}>{record.test_case.environment.name}</Tag>;
+        }
+        
+        // 如果是测试套件执行，显示套件的环境信息
+        if (record.execution_type === 'test_suite' && record.test_suite) {
+          if (record.test_suite.environment_info) {
+            const { type, summary } = record.test_suite.environment_info;
+            const color = type === 'single' ? 'blue' : type === 'multiple' ? 'orange' : 'gray';
+            return <Tag color={color} style={tagStyle}>{summary}</Tag>;
+          } else if (record.test_suite.environment?.name) {
+            // 向后兼容：如果没有environment_info但有environment
+            return <Tag color="blue" style={tagStyle}>{record.test_suite.environment.name}</Tag>;
+          }
+        }
+        
+        return <Tag color="gray" style={tagStyle}>未知环境</Tag>;
+      },
     },
     {
       title: '状态',
@@ -657,8 +684,63 @@ const Reports: React.FC = () => {
                   <Descriptions.Item label="所属项目">
                     {selectedExecution.test_suite?.project?.name}
                   </Descriptions.Item>
-                  <Descriptions.Item label="测试环境">
-                    {selectedExecution.test_suite?.environment?.name}
+                  <Descriptions.Item label="环境信息">
+                    {selectedExecution.test_suite?.environment_info ? (
+                      <div>
+                        <Tag 
+                          color={selectedExecution.test_suite.environment_info.type === 'single' ? 'blue' : 
+                                selectedExecution.test_suite.environment_info.type === 'multiple' ? 'orange' : 'gray'}
+                          style={{
+                            whiteSpace: 'normal',
+                            wordBreak: 'break-word',
+                            height: 'auto',
+                            padding: '4px 8px',
+                            lineHeight: '1.2',
+                            display: 'inline-block',
+                            maxWidth: '200px'
+                          }}
+                        >
+                          {selectedExecution.test_suite.environment_info.summary}
+                        </Tag>
+                        {selectedExecution.test_suite.environment_info.type === 'multiple' && (
+                          <div style={{ marginTop: 8 }}>
+                            {selectedExecution.test_suite.environment_info.environments.map(env => (
+                              <Tag 
+                                key={env.id} 
+                                color="blue" 
+                                style={{ 
+                                  marginTop: 4,
+                                  whiteSpace: 'normal',
+                                  wordBreak: 'break-word',
+                                  height: 'auto',
+                                  padding: '4px 8px',
+                                  lineHeight: '1.2',
+                                  display: 'inline-block',
+                                  maxWidth: '180px'
+                                }}
+                              >
+                                {env.name} ({env.type})
+                              </Tag>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <Tag 
+                        color="blue"
+                        style={{
+                          whiteSpace: 'normal',
+                          wordBreak: 'break-word',
+                          height: 'auto',
+                          padding: '4px 8px',
+                          lineHeight: '1.2',
+                          display: 'inline-block',
+                          maxWidth: '200px'
+                        }}
+                      >
+                        {selectedExecution.test_suite?.environment?.name || '未设置环境'}
+                      </Tag>
+                    )}
                   </Descriptions.Item>
                   <Descriptions.Item label="执行状态">
                     <Space>
@@ -764,7 +846,11 @@ const Reports: React.FC = () => {
                     {selectedTestCaseFromSuite?.test_case?.project?.name || selectedExecution.test_case?.project?.name || selectedExecution.test_suite?.project?.name}
                   </Descriptions.Item>
                   <Descriptions.Item label="测试环境">
-                    {selectedTestCaseFromSuite?.test_case?.environment?.name || selectedExecution.test_case?.environment?.name || selectedExecution.test_suite?.environment?.name}
+                    {selectedTestCaseFromSuite?.test_case?.environment?.name || 
+                     selectedExecution.test_case?.environment?.name || 
+                     (selectedExecution.test_suite?.environment_info?.summary) ||
+                     selectedExecution.test_suite?.environment?.name ||
+                     '未知环境'}
                   </Descriptions.Item>
                   <Descriptions.Item label="执行状态">
                     <Space>

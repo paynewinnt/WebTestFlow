@@ -265,10 +265,37 @@ const Executions: React.FC = () => {
     {
       title: '环境',
       key: 'environment',
-      width: 100,
-      render: (_, record) => (
-        record.test_case?.environment?.name || record.test_suite?.environment?.name
-      ),
+      width: 120,
+      render: (_, record) => {
+        const tagStyle = {
+          whiteSpace: 'normal' as const,
+          wordBreak: 'break-word' as const,
+          height: 'auto',
+          padding: '4px 8px',
+          lineHeight: '1.2',
+          display: 'inline-block',
+          maxWidth: '150px'
+        };
+
+        // 如果是测试用例执行，显示用例的环境
+        if (record.execution_type === 'test_case' && record.test_case?.environment?.name) {
+          return <Tag color="blue" style={tagStyle}>{record.test_case.environment.name}</Tag>;
+        }
+        
+        // 如果是测试套件执行，显示套件的环境信息
+        if (record.execution_type === 'test_suite' && record.test_suite) {
+          if (record.test_suite.environment_info) {
+            const { type, summary } = record.test_suite.environment_info;
+            const color = type === 'single' ? 'blue' : type === 'multiple' ? 'orange' : 'gray';
+            return <Tag color={color} style={tagStyle}>{summary}</Tag>;
+          } else if (record.test_suite.environment?.name) {
+            // 向后兼容：如果没有environment_info但有environment
+            return <Tag color="blue" style={tagStyle}>{record.test_suite.environment.name}</Tag>;
+          }
+        }
+        
+        return <Tag color="gray" style={tagStyle}>未知环境</Tag>;
+      },
     },
     {
       title: '状态',

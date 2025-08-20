@@ -40,17 +40,19 @@ func GetTestSuites(c *gin.Context) {
 
 	// Get paginated test suites with relations
 	offset := (page - 1) * pageSize
-	err := query.Preload("Project").Preload("Environment").Preload("User").Preload("TestCases").
+	err := query.Preload("Project").Preload("Environment").Preload("User").
+		Preload("TestCases").Preload("TestCases.Environment").
 		Offset(offset).Limit(pageSize).Find(&testSuites).Error
 	if err != nil {
 		response.InternalServerError(c, "获取测试套件列表失败")
 		return
 	}
 
-	// Clear user passwords and set test case counts
+	// Clear user passwords, set test case counts, and calculate environment info
 	for i := range testSuites {
 		testSuites[i].User.Password = ""
 		testSuites[i].TestCaseCount = len(testSuites[i].TestCases)
+		testSuites[i].EnvironmentInfo = testSuites[i].GetEnvironmentInfo()
 	}
 
 	response.Page(c, testSuites, total, page, pageSize)
@@ -67,7 +69,7 @@ func CreateTestSuite(c *gin.Context) {
 		Name           string `json:"name" binding:"required,min=1,max=200"`
 		Description    string `json:"description" binding:"max=1000"`
 		ProjectID      uint   `json:"project_id" binding:"required"`
-		EnvironmentID  uint   `json:"environment_id" binding:"required"`
+		EnvironmentID  *uint  `json:"environment_id"` // Made optional
 		TestCaseIDs    []uint `json:"test_case_ids"`
 		Tags           string `json:"tags" binding:"max=500"`
 		Priority       int    `json:"priority" binding:"min=1,max=3"`
@@ -94,12 +96,14 @@ func CreateTestSuite(c *gin.Context) {
 		return
 	}
 
-	// Verify environment exists
-	var environment models.Environment
-	err = database.DB.Where("id = ? AND status = ?", req.EnvironmentID, 1).First(&environment).Error
-	if err != nil {
-		response.NotFound(c, "环境不存在")
-		return
+	// Verify environment exists (if provided)
+	if req.EnvironmentID != nil {
+		var environment models.Environment
+		err = database.DB.Where("id = ? AND status = ?", *req.EnvironmentID, 1).First(&environment).Error
+		if err != nil {
+			response.NotFound(c, "环境不存在")
+			return
+		}
 	}
 
 	// Check if test suite name exists in the project
@@ -111,7 +115,7 @@ func CreateTestSuite(c *gin.Context) {
 		return
 	}
 
-	// Verify test cases exist and belong to the same project
+	// Verify test cases exist and belong to the same project (removed environment consistency check)
 	var testCases []models.TestCase
 	if len(req.TestCaseIDs) > 0 {
 		err = database.DB.Where("id IN ? AND project_id = ? AND status = ?", req.TestCaseIDs, req.ProjectID, 1).
@@ -126,7 +130,7 @@ func CreateTestSuite(c *gin.Context) {
 		Name:           req.Name,
 		Description:    req.Description,
 		ProjectID:      req.ProjectID,
-		EnvironmentID:  req.EnvironmentID,
+		EnvironmentID:  req.EnvironmentID, // Now nullable
 		Tags:           req.Tags,
 		Priority:       req.Priority,
 		CronExpression: req.CronExpression,
@@ -153,10 +157,12 @@ func CreateTestSuite(c *gin.Context) {
 	}
 
 	// Load relations for response
-	database.DB.Preload("Project").Preload("Environment").Preload("User").Preload("TestCases").
+	database.DB.Preload("Project").Preload("Environment").Preload("User").
+		Preload("TestCases").Preload("TestCases.Environment").
 		First(&testSuite, testSuite.ID)
 	testSuite.User.Password = ""
 	testSuite.TestCaseCount = len(testSuite.TestCases)
+	testSuite.EnvironmentInfo = testSuite.GetEnvironmentInfo()
 
 	response.SuccessWithMessage(c, "创建成功", testSuite)
 }
@@ -169,7 +175,8 @@ func GetTestSuite(c *gin.Context) {
 	}
 
 	var testSuite models.TestSuite
-	err = database.DB.Preload("Project").Preload("Environment").Preload("User").Preload("TestCases").
+	err = database.DB.Preload("Project").Preload("Environment").Preload("User").
+		Preload("TestCases").Preload("TestCases.Environment").
 		Where("status = ?", 1).First(&testSuite, id).Error
 	if err != nil {
 		response.NotFound(c, "测试套件不存在")
@@ -178,6 +185,7 @@ func GetTestSuite(c *gin.Context) {
 
 	testSuite.User.Password = ""
 	testSuite.TestCaseCount = len(testSuite.TestCases)
+	testSuite.EnvironmentInfo = testSuite.GetEnvironmentInfo()
 	response.Success(c, testSuite)
 }
 
@@ -197,7 +205,7 @@ func UpdateTestSuite(c *gin.Context) {
 	var req struct {
 		Name           string `json:"name" binding:"omitempty,min=1,max=200"`
 		Description    string `json:"description" binding:"max=1000"`
-		EnvironmentID  uint   `json:"environment_id"`
+		EnvironmentID  *uint  `json:"environment_id"` // Made optional
 		TestCaseIDs    []uint `json:"test_case_ids"`
 		Tags           string `json:"tags" binding:"max=500"`
 		Priority       int    `json:"priority" binding:"min=1,max=3"`
@@ -239,10 +247,10 @@ func UpdateTestSuite(c *gin.Context) {
 	if req.Description != "" {
 		testSuite.Description = req.Description
 	}
-	if req.EnvironmentID != 0 {
+	if req.EnvironmentID != nil {
 		// Verify environment exists
 		var environment models.Environment
-		err := database.DB.Where("id = ? AND status = ?", req.EnvironmentID, 1).First(&environment).Error
+		err := database.DB.Where("id = ? AND status = ?", *req.EnvironmentID, 1).First(&environment).Error
 		if err != nil {
 			response.NotFound(c, "环境不存在")
 			return
@@ -263,7 +271,7 @@ func UpdateTestSuite(c *gin.Context) {
 		testSuite.TimeoutMinutes = req.TimeoutMinutes
 	}
 
-	// Update test cases if provided
+	// Update test cases if provided (removed environment consistency check)
 	if req.TestCaseIDs != nil {
 		var testCases []models.TestCase
 		if len(req.TestCaseIDs) > 0 {
@@ -289,10 +297,12 @@ func UpdateTestSuite(c *gin.Context) {
 	}
 
 	// Load relations for response
-	database.DB.Preload("Project").Preload("Environment").Preload("User").Preload("TestCases").
+	database.DB.Preload("Project").Preload("Environment").Preload("User").
+		Preload("TestCases").Preload("TestCases.Environment").
 		First(&testSuite, testSuite.ID)
 	testSuite.User.Password = ""
 	testSuite.TestCaseCount = len(testSuite.TestCases)
+	testSuite.EnvironmentInfo = testSuite.GetEnvironmentInfo()
 
 	response.SuccessWithMessage(c, "更新成功", testSuite)
 }
