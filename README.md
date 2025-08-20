@@ -9,9 +9,11 @@
 - 🏗️ **项目管理**: 多项目、多环境支持
 - 📝 **测试用例管理**: JSON格式存储，支持复杂交互录制
 - 📊 **测试报告**: 包含执行日志、性能指标、截图等
+- 📄 **报告导出**: 支持HTML和PDF格式导出，无页眉页脚的专业报告
 - ⚡ **并发执行**: 支持最多10个测试用例同时运行
 - ⏰ **定时任务**: 支持cron表达式配置自动执行
 - 🔐 **用户管理**: 完整的用户认证和权限控制
+- 🌐 **跨域支持**: 完整的跨域页面录制和执行能力
 
 ## 技术栈
 
@@ -19,6 +21,7 @@
 - Go 1.21+ + Gin框架
 - MySQL 8.0数据库
 - Chrome DevTools Protocol
+- ChromeDP (PDF生成)
 - Cron定时任务
 - JWT认证
 - WebSocket实时通信
@@ -141,11 +144,15 @@ docker-compose up -d
 2. **测试套件**: 创建测试套件，批量执行多个用例
 3. **定时任务**: 配置cron表达式，自动执行测试套件
 
-### 查看报告
+### 查看和导出报告
 
 1. **执行记录**: 查看每次执行的详细日志和截图
 2. **测试报告**: 生成汇总报告，包含统计信息和趋势
 3. **性能指标**: 查看页面加载时间、内存使用等指标
+4. **报告导出**: 
+   - **HTML格式**: 完整的网页报告，包含交互式截图查看
+   - **PDF格式**: 专业打印格式，无页眉页脚，适合归档和分享
+   - 支持IP地址共享，团队成员可直接访问报告中的截图
 
 ## API文档
 
@@ -179,6 +186,12 @@ POST /api/v1/recording/stop         # 停止录制
 GET  /api/v1/recording/status       # 获取录制状态
 POST /api/v1/recording/save         # 保存录制
 GET  /api/v1/ws/recording           # WebSocket录制连接
+```
+
+### 报告导出
+```
+GET /api/v1/executions/:id/report/html  # 导出HTML格式报告
+GET /api/v1/executions/:id/report/pdf   # 导出PDF格式报告
 ```
 
 ## 配置说明
@@ -300,6 +313,12 @@ WebTestFlow/
    - 确认数据库连接参数
    - 检查用户权限
 
+5. **PDF导出失败**
+   - 检查Chrome可执行文件路径
+   - 确认Flatpak Chrome安装（Linux）
+   - 检查Chrome包装脚本权限
+   - 验证系统内存充足
+
 ### 日志查看
 
 ```bash
@@ -309,6 +328,47 @@ docker-compose logs -f autoui-app
 # 开发环境
 tail -f logs/app.log
 ```
+
+## PDF导出功能
+
+### 特性说明
+
+WebTestFlow支持将测试报告导出为PDF格式，具有以下特性：
+
+- ✅ **Chrome原生打印**: 使用Chrome DevTools Protocol的原生打印功能
+- ✅ **无页眉页脚**: 干净的PDF输出，只包含测试报告内容
+- ✅ **A4标准格式**: 适合打印和归档的标准页面尺寸
+- ✅ **完整内容**: 包含测试汇总、详细结果、截图等所有信息
+- ✅ **高质量渲染**: 确保PDF与网页显示完全一致
+- ✅ **中文支持**: 完整支持中文字符和格式
+
+### 使用方法
+
+1. **Web界面导出**:
+   - 进入测试报告页面
+   - 点击"导出报告"下拉菜单
+   - 选择"PDF报告"
+   - 浏览器将提示选择保存位置
+
+2. **API导出**:
+   ```bash
+   curl -H "Authorization: Bearer YOUR_TOKEN" \
+     "http://localhost:8080/api/v1/executions/{id}/report/pdf" \
+     -o test_report.pdf
+   ```
+
+### 技术实现
+
+- **后端**: Go + ChromeDP + Chrome DevTools Protocol
+- **PDF生成**: Chrome无头模式原生打印
+- **编码处理**: Base64编码避免字符编码问题
+- **文件下载**: 浏览器Blob API + 原生下载
+
+### 系统要求
+
+- Chrome浏览器（支持Flatpak安装）
+- 充足的内存空间（推荐4GB+）
+- 稳定的网络连接（用于加载截图资源）
 
 ## 贡献指南
 
