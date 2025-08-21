@@ -13,6 +13,7 @@ import type {
   TestSuite,
   TestExecution,
   TestReport,
+  TestStep,
   PageData,
 } from '../types';
 
@@ -402,6 +403,7 @@ class ApiService {
     environment_id: number;
     expected_result: string;
     tags: string;
+    steps?: TestStep[]; // 支持传递包含验证码标记的步骤
   }): Promise<TestCase> {
     const response = await this.instance.post<ApiResponse<TestCase>>('/recording/save', data);
     return response.data.data!;

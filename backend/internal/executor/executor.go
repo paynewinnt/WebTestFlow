@@ -697,6 +697,11 @@ func (te *TestExecutor) executeTestCase(executionID uint, testCase *models.TestC
 }
 
 func (te *TestExecutor) executeStep(ctx context.Context, step models.TestStep, stepIndex int) error {
+	// 处理验证码特殊步骤
+	if step.IsCaptcha {
+		return te.handleCaptcha(ctx, step)
+	}
+	
 	switch step.Type {
 	case "click":
 		return te.executeClick(ctx, step)

@@ -55,6 +55,14 @@ export interface TestStep {
   description?: string;
   wait_before?: number;
   skip_step?: boolean;
+  
+  // 验证码相关字段
+  is_captcha?: boolean;
+  captcha_type?: 'image_ocr' | 'sms' | 'sliding';
+  captcha_selector?: string;
+  captcha_input_selector?: string;
+  captcha_phone?: string;
+  captcha_timeout?: number;
 }
 
 export interface TestCase {

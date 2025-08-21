@@ -14,15 +14,17 @@ import {
   Divider,
   List,
   Tag,
+  Tooltip,
 } from 'antd';
 import {
   PlayCircleOutlined,
   StopOutlined,
   SaveOutlined,
-  MonitorOutlined,
+  SecurityScanOutlined,
 } from '@ant-design/icons';
 import { api } from '../../services/api';
 import type { Project, Environment, Device, TestStep } from '../../types';
+import CaptchaMarker from '../../components/CaptchaMarker/CaptchaMarker';
 
 const { Title, Text } = Typography;
 const { TextArea } = Input;
@@ -43,6 +45,11 @@ const Recording: React.FC = () => {
   const [environments, setEnvironments] = useState<Environment[]>([]);
   const [devices, setDevices] = useState<Device[]>([]);
   const [recordingConfig, setRecordingConfig] = useState<any>(null);
+  
+  // Captcha marking states
+  const [captchaModalVisible, setCaptchaModalVisible] = useState(false);
+  const [selectedStep, setSelectedStep] = useState<TestStep | null>(null);
+  const [selectedStepIndex, setSelectedStepIndex] = useState(0);
 
   useEffect(() => {
     loadData();
@@ -147,6 +154,45 @@ const Recording: React.FC = () => {
         return;
       }
       
+      // 尝试从localStorage获取最新的步骤数据作为fallback
+      let finalSteps = recordedSteps;
+      try {
+        const debugSteps = localStorage.getItem('debug_recordedSteps');
+        if (debugSteps) {
+          const parsedSteps = JSON.parse(debugSteps);
+          const debugCaptchaCount = parsedSteps.filter((s: any) => s.is_captcha).length;
+          console.log('🔍 localStorage中的验证码步骤数量:', debugCaptchaCount);
+          
+          if (debugCaptchaCount > 0 && recordedSteps.filter(s => s.is_captcha).length === 0) {
+            console.log('⚡ 使用localStorage中的最新步骤数据');
+            finalSteps = parsedSteps;
+          }
+        }
+      } catch (e) {
+        console.warn('读取localStorage失败:', e);
+      }
+      
+      // 检查验证码标记信息
+      console.log('💾 保存测试用例时的recordedSteps:', finalSteps.length, '个步骤');
+      console.log('💾 每个步骤的is_captcha状态:', finalSteps.map((step, idx) => ({
+        index: idx,
+        type: step.type,
+        is_captcha: step.is_captcha || false,
+        has_captcha_selector: !!(step.captcha_selector)
+      })));
+      
+      const captchaSteps = finalSteps.filter(step => step.is_captcha);
+      console.log('💾 保存测试用例，验证码步骤数量:', captchaSteps.length);
+      if (captchaSteps.length > 0) {
+        console.log('🔐 验证码步骤详情:', captchaSteps.map((step, idx) => ({
+          index: recordedSteps.indexOf(step),
+          is_captcha: step.is_captcha,
+          captcha_type: step.captcha_type,
+          captcha_selector: step.captcha_selector,
+          captcha_input_selector: step.captcha_input_selector
+        })));
+      }
+
       const saveData = {
         session_id: sessionId,
         name: values.name,
@@ -157,6 +203,7 @@ const Recording: React.FC = () => {
         expected_result: values.expected_result,
         tags: values.tags || '',
         priority: values.priority || 2,
+        steps: finalSteps, // 使用修复后的步骤数据，包含验证码标记
       };
 
       await api.saveRecording(saveData);
@@ -193,6 +240,43 @@ const Recording: React.FC = () => {
       submit: 'red',
     };
     return colors[type] || 'default';
+  };
+
+  const handleMarkAsCaptcha = (step: TestStep, index: number) => {
+    setSelectedStep(step);
+    setSelectedStepIndex(index);
+    setCaptchaModalVisible(true);
+  };
+
+  const handleCaptchaMark = (markedStep: TestStep) => {
+    console.log('🔐 验证码标记信息:', {
+      stepIndex: selectedStepIndex,
+      is_captcha: markedStep.is_captcha,
+      captcha_type: markedStep.captcha_type,
+      captcha_selector: markedStep.captcha_selector,
+      captcha_input_selector: markedStep.captcha_input_selector
+    });
+    
+    // 使用函数式更新确保状态同步
+    setRecordedSteps(prev => {
+      const newSteps = [...prev];
+      newSteps[selectedStepIndex] = { ...markedStep }; // 深拷贝确保对象不被引用
+      console.log('📋 更新后的步骤数据:', newSteps[selectedStepIndex]);
+      console.log('📋 验证更新后的验证码步骤数量:', newSteps.filter(s => s.is_captcha).length);
+      
+      // 强制更新localStorage以调试
+      try {
+        localStorage.setItem('debug_recordedSteps', JSON.stringify(newSteps));
+        console.log('📦 已保存到localStorage用于调试');
+      } catch (e) {
+        console.warn('localStorage保存失败:', e);
+      }
+      
+      return newSteps;
+    });
+    
+    // 关闭验证码对话框
+    setCaptchaModalVisible(false);
   };
 
   const steps = [
@@ -305,7 +389,27 @@ const Recording: React.FC = () => {
                 <List
                   dataSource={recordedSteps}
                   renderItem={(step, index) => (
-                    <List.Item>
+                    <List.Item
+                      actions={[
+                        step.is_captcha ? (
+                          <Tag color="gold" icon={<SecurityScanOutlined />}>
+                            {step.captcha_type === 'image_ocr' && '图形验证码'}
+                            {step.captcha_type === 'sms' && '短信验证码'}
+                            {step.captcha_type === 'sliding' && '滑块验证码'}
+                          </Tag>
+                        ) : (
+                          <Tooltip title="标记为验证码">
+                            <Button
+                              size="small"
+                              icon={<SecurityScanOutlined />}
+                              onClick={() => handleMarkAsCaptcha(step, index)}
+                            >
+                              标记验证码
+                            </Button>
+                          </Tooltip>
+                        ),
+                      ]}
+                    >
                       <Space>
                         <Tag color={getStepTypeColor(step.type)}>
                           {step.type}
@@ -432,6 +536,14 @@ const Recording: React.FC = () => {
           </Card>
         )}
       </Spin>
+
+      <CaptchaMarker
+        visible={captchaModalVisible}
+        step={selectedStep}
+        stepIndex={selectedStepIndex}
+        onClose={() => setCaptchaModalVisible(false)}
+        onMark={handleCaptchaMark}
+      />
     </div>
   );
 };

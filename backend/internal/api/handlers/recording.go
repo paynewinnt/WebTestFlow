@@ -120,15 +120,16 @@ func SaveRecording(c *gin.Context) {
 	}
 
 	var req struct {
-		SessionID      string `json:"session_id" binding:"required"`
-		Name           string `json:"name" binding:"required,min=1,max=200"`
-		Description    string `json:"description" binding:"max=1000"`
-		ProjectID      uint   `json:"project_id" binding:"required"`
-		EnvironmentID  uint   `json:"environment_id" binding:"required"`
-		DeviceID       uint   `json:"device_id" binding:"required"`
-		ExpectedResult string `json:"expected_result" binding:"max=1000"`
-		Tags           string `json:"tags" binding:"max=500"`
-		Priority       int    `json:"priority" binding:"min=1,max=3"`
+		SessionID      string              `json:"session_id" binding:"required"`
+		Name           string              `json:"name" binding:"required,min=1,max=200"`
+		Description    string              `json:"description" binding:"max=1000"`
+		ProjectID      uint                `json:"project_id" binding:"required"`
+		EnvironmentID  uint                `json:"environment_id" binding:"required"`
+		DeviceID       uint                `json:"device_id" binding:"required"`
+		ExpectedResult string              `json:"expected_result" binding:"max=1000"`
+		Tags           string              `json:"tags" binding:"max=500"`
+		Priority       int                 `json:"priority" binding:"min=1,max=3"`
+		Steps          []models.TestStep   `json:"steps"` // 支持接收包含验证码标记的步骤
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -165,33 +166,47 @@ func SaveRecording(c *gin.Context) {
 		return
 	}
 
-	// Get recording steps
-	isRecording, steps, err := recorder.Manager.GetRecordingStatus(req.SessionID)
-	if err != nil {
-		response.NotFound(c, "录制会话不存在")
-		return
-	}
+	var stepsJSON []byte
+	
+	// 优先使用前端传递的包含验证码标记的步骤数据
+	if len(req.Steps) > 0 {
+		log.Printf("📋 使用前端传递的步骤数据，共 %d 个步骤（包含验证码标记）", len(req.Steps))
+		var err error
+		stepsJSON, err = json.Marshal(req.Steps)
+		if err != nil {
+			response.InternalServerError(c, "处理步骤数据失败")
+			return
+		}
+	} else {
+		// 回退到从录制管理器获取原始步骤数据
+		log.Printf("📋 前端未传递步骤数据，从录制管理器获取原始步骤")
+		isRecording, steps, err := recorder.Manager.GetRecordingStatus(req.SessionID)
+		if err != nil {
+			response.NotFound(c, "录制会话不存在")
+			return
+		}
 
-	if isRecording {
-		response.BadRequest(c, "请先停止录制")
-		return
-	}
+		if isRecording {
+			response.BadRequest(c, "请先停止录制")
+			return
+		}
 
-	// Ensure steps is never nil
-	if steps == nil {
-		steps = make([]recorder.RecordStep, 0)
-	}
+		// Ensure steps is never nil
+		if steps == nil {
+			steps = make([]recorder.RecordStep, 0)
+		}
 
-	if len(steps) == 0 {
-		response.BadRequest(c, "没有录制到任何操作步骤")
-		return
-	}
+		if len(steps) == 0 {
+			response.BadRequest(c, "没有录制到任何操作步骤")
+			return
+		}
 
-	// Convert steps to JSON
-	stepsJSON, err := json.Marshal(steps)
-	if err != nil {
-		response.InternalServerError(c, "保存步骤数据失败")
-		return
+		// Convert steps to JSON
+		stepsJSON, err = json.Marshal(steps)
+		if err != nil {
+			response.InternalServerError(c, "保存步骤数据失败")
+			return
+		}
 	}
 
 	// Create test case

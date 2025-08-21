@@ -64,6 +64,14 @@ type TestStep struct {
 	Description string                 `json:"description"` // Step description for editing
 	WaitBefore  int                    `json:"wait_before"` // Wait time before executing this step (in seconds)
 	SkipStep    bool                   `json:"skip_step"`   // Whether to skip this step during execution
+	
+	// 验证码相关字段
+	IsCaptcha         bool   `json:"is_captcha"`          // 是否为验证码步骤
+	CaptchaType       string `json:"captcha_type"`        // 验证码类型: image_ocr, sms, sliding
+	CaptchaSelector   string `json:"captcha_selector"`    // 验证码图片选择器
+	CaptchaInputSelector string `json:"captcha_input_selector"` // 验证码输入框选择器
+	CaptchaPhone      string `json:"captcha_phone"`       // 接收短信验证码的手机号
+	CaptchaTimeout    int    `json:"captcha_timeout"`     // 验证码等待超时时间（秒）
 }
 
 type TestCase struct {

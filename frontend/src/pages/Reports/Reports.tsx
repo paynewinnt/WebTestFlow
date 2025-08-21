@@ -34,7 +34,7 @@ import {
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { api } from '../../services/api';
-import type { TestExecution, TestReport, Project, Environment } from '../../types';
+import type { TestExecution, Project, Environment } from '../../types';
 import type { ColumnsType } from 'antd/es/table';
 
 const { Title, Text } = Typography;

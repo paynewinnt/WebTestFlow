@@ -79,3 +79,11 @@ go.work.sum
 screenshots/
 
 CLAUDE.md
+
+# Python virtual environments
+venv/
+.venv/
+services/ocr/venv/
+__pycache__/
+*.pyc
+*.pyo

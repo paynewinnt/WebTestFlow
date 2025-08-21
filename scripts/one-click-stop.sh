@@ -89,11 +89,15 @@ setup_container_env
 
 # Stop backend service
 print_status "Stopping backend service..."
-stop_service "Backend" ".backend.pid"
+stop_service "Backend" "logs/pid/backend.pid"
 
 # Stop frontend service
 print_status "Stopping frontend service..."
-stop_service "Frontend" ".frontend.pid"
+stop_service "Frontend" "logs/pid/frontend.pid"
+
+# Stop OCR service
+print_status "Stopping OCR service..."
+stop_service "OCR" "logs/pid/ocr.pid"
 
 # Function to run Docker Compose commands
 run_docker_compose() {
@@ -134,6 +138,18 @@ else
     print_status "MySQL container was not running"
 fi
 
+# Stop OCR service container
+print_status "Stopping OCR service container..."
+if docker ps --format "table {{.Names}}" | grep -q "webtestflow-ocr"; then
+    docker stop webtestflow-ocr >/dev/null 2>&1 && print_success "OCR container stopped" || true
+    docker rm webtestflow-ocr >/dev/null 2>&1 && print_success "OCR container removed" || true
+elif docker ps --format "table {{.Names}}" | grep -q "ocr-service"; then
+    run_docker_compose down ocr-service
+    print_success "OCR service stopped via Docker Compose"
+else
+    print_status "OCR container was not running"
+fi
+
 # Clean up any remaining processes
 print_status "Cleaning up any remaining processes..."
 
@@ -161,6 +177,15 @@ pkill -f "node.*react-scripts" 2>/dev/null && print_success "Stopped node react-
 # Kill any processes using port 3000 (frontend port)
 if lsof -ti:3000 >/dev/null 2>&1; then
     lsof -ti:3000 | xargs kill -9 2>/dev/null && print_success "Killed processes on port 3000" || true
+fi
+
+# Kill OCR service processes
+print_status "Stopping OCR service processes..."
+# Kill any Python OCR processes
+pkill -f "ocr_server.py" 2>/dev/null && print_success "Stopped OCR server processes" || true
+# Kill any processes using port 8888 (OCR port)
+if lsof -ti:8888 >/dev/null 2>&1; then
+    lsof -ti:8888 | xargs kill -9 2>/dev/null && print_success "Killed processes on port 8888" || true
 fi
 
 # Kill any Chrome processes started by the test framework

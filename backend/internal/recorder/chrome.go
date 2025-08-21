@@ -11,11 +11,12 @@ import (
 	"sync"
 	"time"
 
+	"webtestflow/backend/pkg/chrome"
+
 	"github.com/chromedp/cdproto/page"
 	cdpruntime "github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 	"github.com/gorilla/websocket"
-	"webtestflow/backend/pkg/chrome"
 )
 
 type ChromeRecorder struct {
@@ -182,7 +183,7 @@ func (r *ChromeRecorder) StopRecording() error {
 	// Get any remaining events before stopping
 	if r.ctx != nil {
 		log.Printf("DEBUG StopRecording: Attempting to get all events from browser...")
-		
+
 		// First, check if recorder exists and get raw event count
 		var rawEventCount int
 		err := chromedp.Run(r.ctx,
@@ -191,7 +192,7 @@ func (r *ChromeRecorder) StopRecording() error {
 		if err == nil {
 			log.Printf("DEBUG Raw events in browser: %d", rawEventCount)
 		}
-		
+
 		var allEvents []RecordStep
 		err = chromedp.Run(r.ctx,
 			chromedp.Evaluate(`window.autoUIRecorder && window.autoUIRecorder.getAllEvents()`, &allEvents),
@@ -202,15 +203,15 @@ func (r *ChromeRecorder) StopRecording() error {
 		} else {
 			log.Printf("SUCCESS Successfully retrieved %d events from current page", len(allEvents))
 		}
-		
+
 		// CRITICAL FIX: Cross-domain event preservation
 		log.Printf("🔧 CROSS-DOMAIN ANALYSIS:")
 		log.Printf("🔧   WebSocket polling collected: %d events", len(r.steps))
 		log.Printf("🔧   Current page has: %d events", len(allEvents))
-		
+
 		// Key insight: For cross-domain scenarios, WebSocket polling is the authoritative source
 		// because it collects events from all domains during navigation
-		
+
 		if len(r.steps) >= len(allEvents) {
 			// WebSocket has same or more events - this is the cross-domain collection
 			log.Printf("🔧 SOLUTION: Using WebSocket-collected events (%d) as they contain cross-domain history", len(r.steps))
@@ -235,8 +236,8 @@ func (r *ChromeRecorder) StopRecording() error {
 			}
 			log.Printf("🔧 After merge: %d total events", len(r.steps))
 		}
-		
-		// Additional debug: try to get events array directly  
+
+		// Additional debug: try to get events array directly
 		var directEvents []RecordStep
 		directErr := chromedp.Run(r.ctx,
 			chromedp.Evaluate(`window.autoUIRecorder ? window.autoUIRecorder.events : []`, &directEvents),
@@ -244,7 +245,7 @@ func (r *ChromeRecorder) StopRecording() error {
 		if directErr == nil {
 			log.Printf("DEBUG Direct events array length: %d", len(directEvents))
 		}
-		
+
 		// Final event count for user feedback
 		log.Printf("🎯 FINAL RESULT: Saving %d events to database", len(r.steps))
 	}
@@ -340,7 +341,7 @@ func (r *ChromeRecorder) listenForEvents() {
 				}
 
 				log.Printf("Error getting events: %v", err)
-				
+
 				// Simple script re-injection check
 				if strings.Contains(err.Error(), "autoUIRecorder") || strings.Contains(err.Error(), "undefined") {
 					now := time.Now()
@@ -388,7 +389,7 @@ func (r *ChromeRecorder) reinjectRecordingScript() {
 	maxAttempts := 3
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		log.Printf("🔄 Reinject attempt %d/%d", attempt, maxAttempts)
-		
+
 		// First check if recording script is already present and working
 		var recorderExists bool
 		err := chromedp.Run(r.ctx,
@@ -450,7 +451,7 @@ func (r *ChromeRecorder) reinjectRecordingScript() {
 				log.Printf("FILTERED JavaScript syntax error detected, stopping reinject attempts")
 				return
 			}
-			
+
 			// Wait before retrying
 			if attempt < maxAttempts {
 				log.Printf("⏱️ Waiting 1s before retry...")
@@ -462,7 +463,7 @@ func (r *ChromeRecorder) reinjectRecordingScript() {
 		// Verify the injection worked
 		log.Printf("SUCCESS Recording script re-injected successfully (attempt %d)", attempt)
 		time.Sleep(300 * time.Millisecond)
-		
+
 		var verified bool
 		chromedp.Run(r.ctx, chromedp.Evaluate(`(function() {
 			try {
@@ -478,7 +479,7 @@ func (r *ChromeRecorder) reinjectRecordingScript() {
 
 		if verified {
 			log.Printf("SUCCESS Recording script injection verified successfully!")
-			
+
 			// Log current event count
 			var eventCount int
 			chromedp.Run(r.ctx, chromedp.Evaluate(`
@@ -499,47 +500,47 @@ func (r *ChromeRecorder) reinjectRecordingScript() {
 			}
 		}
 	}
-	
+
 	log.Printf("❌ All reinject attempts failed")
 }
 
 // enhancedCrossDomainReinject handles cross-domain navigation more aggressively
 func (r *ChromeRecorder) enhancedCrossDomainReinject() {
 	log.Printf("🌐 Enhanced cross-domain re-injection started")
-	
+
 	// Wait a bit longer for cross-domain navigation to complete
 	time.Sleep(1 * time.Second)
-	
+
 	maxAttempts := 5
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		log.Printf("🌐 Cross-domain reinject attempt %d/%d", attempt, maxAttempts)
-		
+
 		// Step 1: Check current URL and domain
 		var currentURL string
-		err := chromedp.Run(r.ctx, 
+		err := chromedp.Run(r.ctx,
 			chromedp.Evaluate(`window.location.href`, &currentURL))
-		
+
 		if err != nil {
 			log.Printf("❌ Cannot get current URL (attempt %d): %v", attempt, err)
 			time.Sleep(time.Duration(attempt) * time.Second)
 			continue
 		}
-		
+
 		log.Printf("📍 Cross-domain reinject: current URL is %s", currentURL)
-		
+
 		// Step 2: Wait for document ready state
 		var readyState string
 		err = chromedp.Run(r.ctx,
 			chromedp.Evaluate(`document.readyState`, &readyState))
-		
+
 		if err != nil {
 			log.Printf("❌ Cannot check document ready state (attempt %d): %v", attempt, err)
 			time.Sleep(time.Duration(attempt) * time.Second)
 			continue
 		}
-		
+
 		log.Printf("📄 Document ready state: %s", readyState)
-		
+
 		// Step 3: Wait for complete load if not ready
 		if readyState != "complete" {
 			log.Printf("⏳ Waiting for document to complete loading...")
@@ -552,7 +553,7 @@ func (r *ChromeRecorder) enhancedCrossDomainReinject() {
 				continue
 			}
 		}
-		
+
 		// Step 4: Force clear any existing recorder state
 		err = chromedp.Run(r.ctx,
 			chromedp.Evaluate(`
@@ -584,24 +585,24 @@ func (r *ChromeRecorder) enhancedCrossDomainReinject() {
 					return false;
 				}
 			`, nil))
-		
+
 		if err != nil {
 			log.Printf("❌ Failed to clear cross-domain state (attempt %d): %v", attempt, err)
 		}
-		
+
 		// Step 5: Inject fresh recording script with cross-domain awareness
 		err = chromedp.Run(r.ctx,
 			chromedp.Evaluate(getRecordingScript(), nil))
-		
+
 		if err != nil {
 			log.Printf("❌ Failed to inject cross-domain recording script (attempt %d): %v", attempt, err)
 			time.Sleep(time.Duration(attempt) * time.Second)
 			continue
 		}
-		
+
 		// Step 6: Verify injection worked
 		var verified bool
-		err = chromedp.Run(r.ctx, 
+		err = chromedp.Run(r.ctx,
 			chromedp.Evaluate(`
 				(function() {
 					try {
@@ -628,17 +629,17 @@ func (r *ChromeRecorder) enhancedCrossDomainReinject() {
 					}
 				})()
 			`, &verified))
-		
+
 		if err != nil {
 			log.Printf("❌ Failed to verify cross-domain injection (attempt %d): %v", attempt, err)
 			time.Sleep(time.Duration(attempt) * time.Second)
 			continue
 		}
-		
+
 		if verified {
 			log.Printf("SUCCESS Cross-domain recorder injection successful after %d attempts", attempt)
 			log.Printf("🎯 Now monitoring domain: %s", currentURL)
-			
+
 			// Log current event count
 			var eventCount int
 			chromedp.Run(r.ctx, chromedp.Evaluate(`
@@ -653,18 +654,18 @@ func (r *ChromeRecorder) enhancedCrossDomainReinject() {
 			log.Printf("📊 Current event count after cross-domain reinject: %d", eventCount)
 			return
 		}
-		
+
 		log.Printf("⚠️ Cross-domain verification failed (attempt %d), retrying...", attempt)
 		time.Sleep(time.Duration(attempt) * time.Second)
 	}
-	
+
 	log.Printf("❌ All cross-domain reinject attempts failed")
 }
 
 // setupNavigationListeners sets up Chrome DevTools Protocol listeners for page navigation events
 func (r *ChromeRecorder) setupNavigationListeners() {
 	log.Printf("🔧 Setting up Chrome DevTools Protocol navigation listeners")
-	
+
 	// Enable page domain events
 	chromedp.ListenTarget(r.ctx, func(ev interface{}) {
 		switch ev := ev.(type) {
@@ -677,7 +678,7 @@ func (r *ChromeRecorder) setupNavigationListeners() {
 					r.enhancedCrossDomainReinject()
 				}()
 			}
-			
+
 		case *page.EventNavigatedWithinDocument:
 			log.Printf("🔄 CDP: Navigation within document to %s", ev.URL)
 			// For SPA navigation, also try re-injection
@@ -685,7 +686,7 @@ func (r *ChromeRecorder) setupNavigationListeners() {
 				time.Sleep(500 * time.Millisecond)
 				r.reinjectRecordingScript()
 			}()
-			
+
 		case *page.EventDomContentEventFired:
 			log.Printf("📄 CDP: DOM content loaded")
 			// DOM loaded, check if script needs re-injection
@@ -693,7 +694,7 @@ func (r *ChromeRecorder) setupNavigationListeners() {
 				time.Sleep(300 * time.Millisecond)
 				r.verifyAndReinjectIfNeeded()
 			}()
-			
+
 		case *page.EventLoadEventFired:
 			log.Printf("SUCCESS CDP: Page load complete")
 			// Page fully loaded, ensure script is present
@@ -701,15 +702,15 @@ func (r *ChromeRecorder) setupNavigationListeners() {
 				time.Sleep(500 * time.Millisecond)
 				r.verifyAndReinjectIfNeeded()
 			}()
-			
+
 		case *cdpruntime.EventConsoleAPICalled:
 			// Monitor console messages for potential script errors
 			if len(ev.Args) > 0 {
 				for _, arg := range ev.Args {
 					if arg.Value != nil {
 						message := string(arg.Value)
-						if strings.Contains(message, "autoUIRecorder") || 
-						   strings.Contains(message, "Cross-domain") {
+						if strings.Contains(message, "autoUIRecorder") ||
+							strings.Contains(message, "Cross-domain") {
 							log.Printf("DEBUG CDP Console: %s", message)
 						}
 					}
@@ -717,13 +718,13 @@ func (r *ChromeRecorder) setupNavigationListeners() {
 			}
 		}
 	})
-	
+
 	// Enable the page domain to receive events
 	err := chromedp.Run(r.ctx,
 		page.Enable(),
 		cdpruntime.Enable(),
 	)
-	
+
 	if err != nil {
 		log.Printf("❌ Failed to enable CDP event listeners: %v", err)
 	} else {
@@ -736,7 +737,7 @@ func (r *ChromeRecorder) verifyAndReinjectIfNeeded() {
 	var recorderPresent bool
 	err := chromedp.Run(r.ctx,
 		chromedp.Evaluate(`!!(window.autoUIRecorder && window.autoUIRecorder.isRecording)`, &recorderPresent))
-	
+
 	if err != nil || !recorderPresent {
 		log.Printf("🔄 CDP: Recorder script missing, triggering re-injection")
 		r.enhancedCrossDomainReinject()
@@ -843,6 +844,8 @@ func getRecordingScript() string {
 		recentEvents: new Map(), // Track recent events to prevent duplicates
 		userIsScrolling: false, // Track if user is actively scrolling
 		lastUserInteraction: 0, // Timestamp of last user interaction
+		inputTimeouts: new Map(), // Track input debounce timeouts
+		inputDebounceDelay: 1000, // 1000ms debounce delay for input event
 
 		// Generate ChromeDP code for an event
 		generateChromeDPCode: function(event) {
@@ -987,6 +990,27 @@ func getRecordingScript() string {
 			return false;
 		},
 
+		// Debounced input event handler
+		addDebouncedInputEvent: function(event) {
+			const key = event.selector + '_' + event.type;
+			
+			// Clear existing timeout for this selector
+			if (this.inputTimeouts.has(key)) {
+				clearTimeout(this.inputTimeouts.get(key));
+			}
+			
+			// Set new timeout
+			const timeoutId = setTimeout(() => {
+				// Add the final input event
+				this.addEvent(event);
+				this.inputTimeouts.delete(key);
+			}, this.inputDebounceDelay);
+			
+			this.inputTimeouts.set(key, timeoutId);
+			
+			console.log('📝 Input debounced for selector:', event.selector, 'value:', event.value);
+		},
+
 		addEvent: function(event) {
 			if (this.isRecording) {
 				try {
@@ -1002,6 +1026,21 @@ func getRecordingScript() string {
 							JSON.stringify(event);
 						} catch (e) {
 							return;
+						}
+						
+						// Handle input events with debouncing
+						if (event.type === 'input') {
+							// Remove any existing input events for this selector from recent events
+							for (let i = this.events.length - 1; i >= 0; i--) {
+								const existingEvent = this.events[i];
+								if (existingEvent.type === 'input' && 
+									existingEvent.selector === event.selector &&
+									(Date.now() - existingEvent.timestamp) < this.inputDebounceDelay * 2) {
+									this.events.splice(i, 1);
+									console.log('🗑️ Removed previous input event for selector:', event.selector);
+									break;
+								}
+							}
 						}
 						
 						event.chromedpCode = this.generateChromeDPCode(event);
@@ -1650,12 +1689,12 @@ func getRecordingScript() string {
 		}
 	}, true);
 	
-	// Input events
+	// Input events with debouncing
 	document.addEventListener('input', function(event) {
 		if (event.isTrusted && event.target.tagName && !hasProblematicContent(event)) {
 			const tagName = event.target.tagName.toLowerCase();
 			if (tagName === 'input' || tagName === 'textarea') {
-				window.autoUIRecorder.addEvent({
+				window.autoUIRecorder.addDebouncedInputEvent({
 					type: 'input',
 					selector: window.autoUIRecorder.getSelector(event.target),
 					value: event.target.value,
@@ -1668,22 +1707,34 @@ func getRecordingScript() string {
 		}
 	}, true);
 	
-	// Key events
+	// Key events - only record meaningful keys (Enter, Escape, Tab, etc.)
 	document.addEventListener('keydown', function(event) {
 		if (event.isTrusted && !hasProblematicContent(event)) {
-			window.autoUIRecorder.addEvent({
-				type: 'keydown',
-				selector: window.autoUIRecorder.getSelector(event.target),
-				value: event.key,
-				timestamp: Date.now(),
-				options: {
-					keyCode: event.keyCode,
-					ctrlKey: event.ctrlKey,
-					shiftKey: event.shiftKey,
-					altKey: event.altKey,
-					metaKey: event.metaKey
-				}
-			});
+			// Only record special keys and shortcuts, not regular character input
+			const meaningfulKeys = [
+				'Enter', 'Escape', 'Tab', 'Backspace', 'Delete',
+				'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
+				'Home', 'End', 'PageUp', 'PageDown'
+			];
+			
+			const isShortcut = event.ctrlKey || event.metaKey || event.altKey;
+			const isMeaningfulKey = meaningfulKeys.includes(event.key);
+			
+			if (isMeaningfulKey || isShortcut) {
+				window.autoUIRecorder.addEvent({
+					type: 'keydown',
+					selector: window.autoUIRecorder.getSelector(event.target),
+					value: event.key,
+					timestamp: Date.now(),
+					options: {
+						keyCode: event.keyCode,
+						ctrlKey: event.ctrlKey,
+						shiftKey: event.shiftKey,
+						altKey: event.altKey,
+						metaKey: event.metaKey
+					}
+				});
+			}
 		}
 	}, true);
 	

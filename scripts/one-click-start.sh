@@ -579,7 +579,7 @@ setup_container_env
 
 # Create necessary directories
 print_status "Creating necessary directories..."
-mkdir -p uploads screenshots logs
+mkdir -p uploads screenshots logs/pid
 
 # Setup environment variables
 if [ ! -f .env ]; then
@@ -605,6 +605,19 @@ JWT_EXPIRE_TIME=86400
 CHROME_HEADLESS=false
 CHROME_MAX_INSTANCES=10
 CHROME_DEBUG_PORT=9222
+
+# OCR Service Configuration
+OCR_SERVICE_URL=http://localhost:8888
+OCR_ENABLED=true
+OCR_TIMEOUT=10
+
+# ADB Configuration (for SMS verification codes)
+ADB_ENABLED=true
+ADB_TIMEOUT=60
+
+# Captcha Configuration
+CAPTCHA_DEFAULT_TIMEOUT=60
+CAPTCHA_MAX_RETRIES=3
 
 # Timeout Configuration
 SERVER_READ_TIMEOUT=30
@@ -939,6 +952,95 @@ print_success "Frontend dependencies ready"
 # Go back to root
 cd ..
 
+# Start OCR service (if enabled)
+start_ocr_service() {
+    print_status "Starting OCR service..."
+    
+    # Check if OCR service is already running
+    if curl -s http://localhost:8888/health > /dev/null 2>&1; then
+        print_success "OCR service is already running"
+        return 0
+    fi
+    
+    # Priority 1: Local Python (fastest startup)
+    if command_exists python3 && [ -d "services/ocr" ]; then
+        print_status "Starting OCR service with local Python..."
+        cd services/ocr
+        
+        # Check if virtual environment exists
+        if [ ! -d "venv" ]; then
+            print_status "Creating Python virtual environment for OCR..."
+            python3 -m venv venv
+        fi
+        
+        # Activate virtual environment and install dependencies
+        source venv/bin/activate
+        if [ -f "requirements.txt" ]; then
+            print_status "Installing OCR dependencies..."
+            pip install -r requirements.txt > /dev/null 2>&1 || {
+                print_warning "Some Python packages failed to install, OCR may not work properly"
+            }
+        fi
+        
+        # Start OCR server in background
+        print_status "Starting OCR server (Python)..."
+        nohup python3 ocr_server.py > ../../logs/ocr.log 2>&1 &
+        OCR_PID=$!
+        cd ../..
+        
+        # Save PID
+        echo $OCR_PID > logs/pid/ocr.pid
+        
+        # Wait a moment for service to start
+        sleep 2
+        
+        # Verify service started successfully
+        if curl -s http://localhost:8888/health > /dev/null 2>&1; then
+            print_success "OCR service started successfully with Python (PID: $OCR_PID)"
+            return 0
+        else
+            print_warning "OCR service failed to start properly, check logs/ocr.log"
+        fi
+    fi
+    
+    # Priority 2: Docker Compose (if available and user prefers containers)
+    if command_exists docker && [ -f "docker-compose.yml" ] && grep -q "ocr-service" docker-compose.yml; then
+        print_status "Trying OCR service with Docker Compose..."
+        if run_docker_compose up -d ocr-service 2>/dev/null; then
+            print_success "OCR service started via Docker Compose"
+            return 0
+        else
+            print_warning "Docker Compose OCR startup failed"
+        fi
+    fi
+    
+    # Priority 3: Standalone Docker (if image exists)
+    if command_exists docker && docker images | grep -q "webtestflow-ocr"; then
+        print_status "Trying OCR service with standalone Docker..."
+        docker rm -f webtestflow-ocr 2>/dev/null || true
+        if docker run -d \
+            --name webtestflow-ocr \
+            --restart unless-stopped \
+            -p 8888:8888 \
+            -e OCR_HOST=0.0.0.0 \
+            -e OCR_PORT=8888 \
+            webtestflow-ocr:latest > /dev/null 2>&1; then
+            print_success "OCR service started via standalone Docker"
+            return 0
+        else
+            print_warning "Standalone Docker OCR startup failed"
+        fi
+    fi
+    
+    print_warning "OCR service could not be started"
+    print_status "图形验证码识别功能将不可用"
+    print_status "💡 提示: 可以稍后使用 ./scripts/deploy-captcha.sh 单独部署OCR服务"
+    return 1
+}
+
+# Start OCR service
+start_ocr_service
+
 # Start backend service
 print_status "Starting backend service..."
 cd backend
@@ -954,8 +1056,17 @@ FRONTEND_PID=$!
 cd ..
 
 # Save PIDs for later cleanup
-echo $BACKEND_PID > .backend.pid
-echo $FRONTEND_PID > .frontend.pid
+echo $BACKEND_PID > logs/pid/backend.pid
+echo $FRONTEND_PID > logs/pid/frontend.pid
+
+# Function to check OCR service status
+check_ocr_service() {
+    if curl -s http://localhost:8888/health > /dev/null 2>&1; then
+        return 0
+    else
+        return 1
+    fi
+}
 
 # Display startup information
 echo ""
@@ -966,16 +1077,24 @@ echo -e "${BLUE}📊 Service Information:${NC}"
 echo "   MySQL PID: Container (webtestflow-mysql)"
 echo "   Backend PID: $BACKEND_PID"
 echo "   Frontend PID: $FRONTEND_PID"
+if [ -f "logs/pid/ocr.pid" ]; then
+    OCR_PID=$(cat logs/pid/ocr.pid 2>/dev/null)
+    echo "   OCR Service PID: $OCR_PID (Python)"
+else
+    echo "   OCR Service: Docker Container 或 未启动"
+fi
 echo ""
 echo -e "${BLUE}🌐 Access URLs:${NC}"
 echo "   🖥️  Frontend Application: http://localhost:3000"
 echo "   🔌 Backend API: http://localhost:8080/api/v1"
 echo "   ❤️  Health Check: http://localhost:8080/api/v1/health"
+echo "   🔍 OCR Service: http://localhost:8888/health"
 echo "   🗄️  MySQL Database: localhost:3306 (webtestflow/123456)"
 echo ""
 echo -e "${BLUE}📋 Useful Commands:${NC}"
 echo "   📖 View Backend Logs: tail -f logs/backend.log"
 echo "   📖 View Frontend Logs: tail -f logs/frontend.log"
+echo "   📖 View OCR Logs: tail -f logs/ocr.log"
 echo "   📖 View All Logs: tail -f logs/*.log"
 echo "   🔍 Check MySQL: docker exec -it webtestflow-mysql mysql -u webtestflow -p123456 webtestflow
    🔍 Check Local MySQL: mysql -u webtestflow -p123456 webtestflow"
@@ -1005,6 +1124,26 @@ elif [[ "$MYSQL_TYPE" == "docker" ]]; then
     fi
 else
     print_error "❌ MySQL service status unknown"
+fi
+
+# Check OCR Service
+if check_ocr_service; then
+    if [ -f "logs/pid/ocr.pid" ]; then
+        OCR_PID=$(cat logs/pid/ocr.pid 2>/dev/null)
+        if kill -0 $OCR_PID 2>/dev/null; then
+            print_success "✅ OCR service is running (Python PID: $OCR_PID)"
+        else
+            print_success "✅ OCR service is running (Docker Container)"
+        fi
+    else
+        print_success "✅ OCR service is running (Docker Container)"
+    fi
+else
+    print_warning "⚠️ OCR service is not running - 图形验证码功能不可用"
+    if [ -f "logs/pid/ocr.pid" ]; then
+        print_status "提示: 检查 logs/ocr.log 查看启动错误"
+    fi
+    print_status "可以使用 ./scripts/deploy-captcha.sh 单独部署OCR服务"
 fi
 
 # Check Backend
