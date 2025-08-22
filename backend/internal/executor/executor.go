@@ -806,8 +806,12 @@ func (te *TestExecutor) executeClick(ctx context.Context, step models.TestStep) 
 
 		log.Printf("✓ Element ready for interaction: %s", selector)
 
-		// Add additional wait for dynamic content to stabilize
-		time.Sleep(500 * time.Millisecond)
+		// Enhanced stabilization wait for dynamic content
+		log.Printf("⏳ Waiting for element stabilization...")
+		te.waitForElementStabilization(ctx, selector)
+		
+		// Additional safety wait
+		time.Sleep(800 * time.Millisecond)
 
 		// Try clicking with retry mechanism
 		maxRetries := 3
@@ -944,7 +948,7 @@ func (te *TestExecutor) extractClassSelectors(selector string) []string {
 // waitForElementSmart uses multiple strategies to wait for element availability
 func (te *TestExecutor) waitForElementSmart(ctx context.Context, selector string) error {
 	// Strategy 1: Standard wait for visible and enabled (shorter timeout for first attempt)
-	ctxShort, cancel1 := context.WithTimeout(ctx, 5*time.Second)
+	ctxShort, cancel1 := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel1()
 	
 	err := chromedp.Run(ctxShort,
@@ -953,49 +957,212 @@ func (te *TestExecutor) waitForElementSmart(ctx context.Context, selector string
 	)
 	
 	if err == nil {
+		log.Printf("✅ Standard wait successful for: %s", selector)
 		return nil // Success with standard approach
 	}
 	
-	log.Printf("Standard wait failed for %s, trying extended strategies: %v", selector, err)
+	log.Printf("⏳ Standard wait failed for %s, trying extended strategies: %v", selector, err)
 	
-	// Strategy 2: Wait for DOM presence first, then visibility (longer timeout)
-	ctxLong, cancel2 := context.WithTimeout(ctx, 15*time.Second)
+	// Strategy 2: Enhanced progressive wait with page stability checks
+	ctxLong, cancel2 := context.WithTimeout(ctx, 25*time.Second)
 	defer cancel2()
 	
-	// First wait for element to exist in DOM
+	// Step 1: Wait for page to be generally stable (DOM loading complete)
+	log.Printf("🔄 Waiting for page stability...")
+	for i := 0; i < 10; i++ { // 10 attempts * 1s = 10 seconds max for page stability
+		var pageReady bool
+		err = chromedp.Run(ctxLong, 
+			chromedp.Evaluate(`
+				(function() {
+					// Check multiple page readiness indicators
+					const docReady = document.readyState === 'complete';
+					const noActiveRequests = !window.fetch || window.fetch.toString().indexOf('[native code]') > -1;
+					const noLoadingElements = document.querySelectorAll('[class*="loading"], [class*="spinner"]').length === 0;
+					return docReady && noLoadingElements;
+				})();
+			`, &pageReady),
+		)
+		
+		if err == nil && pageReady {
+			log.Printf("✅ Page stability achieved after %d attempts", i+1)
+			break
+		}
+		
+		log.Printf("⏳ Page not ready, attempt %d/10", i+1)
+		time.Sleep(1 * time.Second)
+	}
+	
+	// Step 2: Wait for DOM element presence
+	log.Printf("🔍 Waiting for element in DOM: %s", selector)
 	err = chromedp.Run(ctxLong, chromedp.WaitReady(selector, chromedp.ByQuery))
 	if err != nil {
-		log.Printf("Element not in DOM: %s, error: %v", selector, err)
+		log.Printf("❌ Element not found in DOM: %s, error: %v", selector, err)
 		return err
 	}
 	
-	// Then wait for visibility with polling
-	for i := 0; i < 30; i++ { // 30 attempts * 500ms = 15 seconds max
-		var visible bool
+	log.Printf("✅ Element found in DOM: %s", selector)
+	
+	// Step 3: Wait for element visibility and interactability with enhanced checks
+	log.Printf("🎯 Waiting for element visibility and interactability...")
+	for i := 0; i < 40; i++ { // 40 attempts * 500ms = 20 seconds max
+		var elementState map[string]interface{}
 		err = chromedp.Run(ctxLong, 
 			chromedp.Evaluate(fmt.Sprintf(`
 				(function() {
 					const el = document.querySelector('%s');
-					if (!el) return false;
+					if (!el) return {exists: false};
+					
 					const rect = el.getBoundingClientRect();
 					const style = window.getComputedStyle(el);
-					return rect.width > 0 && rect.height > 0 && 
-					       style.visibility !== 'hidden' && 
-					       style.display !== 'none' &&
-					       !el.disabled;
+					const isVisible = rect.width > 0 && rect.height > 0 && 
+					                 style.visibility !== 'hidden' && 
+					                 style.display !== 'none' &&
+					                 style.opacity !== '0';
+					const isInteractable = !el.disabled && 
+					                      !el.hasAttribute('disabled') &&
+					                      style.pointerEvents !== 'none';
+					const inViewport = rect.top >= 0 && rect.top <= window.innerHeight;
+					
+					return {
+						exists: true,
+						visible: isVisible,
+						interactable: isInteractable,
+						inViewport: inViewport,
+						rect: {top: rect.top, left: rect.left, width: rect.width, height: rect.height},
+						styles: {
+							display: style.display,
+							visibility: style.visibility,
+							opacity: style.opacity,
+							pointerEvents: style.pointerEvents
+						}
+					};
 				})();
-			`, selector), &visible),
+			`, selector), &elementState),
 		)
 		
-		if err == nil && visible {
-			log.Printf("Element became visible after %d attempts: %s", i+1, selector)
-			return nil
+		if err != nil {
+			log.Printf("⚠️ Element state check failed, attempt %d/40: %v", i+1, err)
+		} else if state, ok := elementState["exists"].(bool); ok && state {
+			visible, _ := elementState["visible"].(bool)
+			interactable, _ := elementState["interactable"].(bool)
+			inViewport, _ := elementState["inViewport"].(bool)
+			
+			if i%5 == 0 { // Log detailed status every 5 attempts
+				log.Printf("📊 Element state (attempt %d/40): visible=%t, interactable=%t, inViewport=%t", 
+					i+1, visible, interactable, inViewport)
+			}
+			
+			if visible && interactable {
+				if !inViewport {
+					// Try to scroll element into view
+					log.Printf("📜 Element not in viewport, scrolling into view...")
+					chromedp.Run(ctxLong, chromedp.Evaluate(fmt.Sprintf(`
+						document.querySelector('%s').scrollIntoView({behavior: 'smooth', block: 'center'});
+					`, selector), nil))
+					time.Sleep(1 * time.Second) // Wait for scroll to complete
+				} else {
+					log.Printf("✅ Element ready for interaction after %d attempts: %s", i+1, selector)
+					return nil
+				}
+			}
 		}
 		
 		time.Sleep(500 * time.Millisecond)
 	}
 	
-	return fmt.Errorf("element %s not visible after extended wait", selector)
+	// Final diagnostic before giving up
+	log.Printf("🚨 Final element diagnostic for: %s", selector)
+	var finalState map[string]interface{}
+	chromedp.Run(ctxLong, chromedp.Evaluate(fmt.Sprintf(`
+		(function() {
+			const el = document.querySelector('%s');
+			if (!el) return {error: 'Element not found'};
+			
+			const rect = el.getBoundingClientRect();
+			const style = window.getComputedStyle(el);
+			return {
+				tagName: el.tagName,
+				className: el.className,
+				id: el.id,
+				rect: {top: rect.top, left: rect.left, width: rect.width, height: rect.height},
+				visible: rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none',
+				disabled: el.disabled || el.hasAttribute('disabled'),
+				styles: {
+					display: style.display,
+					visibility: style.visibility,
+					opacity: style.opacity,
+					pointerEvents: style.pointerEvents
+				}
+			};
+		})();
+	`, selector), &finalState))
+	
+	if finalState != nil {
+		log.Printf("🔍 Final element state: %+v", finalState)
+	}
+	
+	return fmt.Errorf("element %s not ready for interaction after enhanced wait (25s)", selector)
+}
+
+// waitForElementStabilization waits for element to stop changing (position, size, style)
+func (te *TestExecutor) waitForElementStabilization(ctx context.Context, selector string) {
+	maxStabilizationAttempts := 10 // 10 attempts * 300ms = 3 seconds max
+	var previousState map[string]interface{}
+	
+	for i := 0; i < maxStabilizationAttempts; i++ {
+		var currentState map[string]interface{}
+		err := chromedp.Run(ctx, 
+			chromedp.Evaluate(fmt.Sprintf(`
+				(function() {
+					const el = document.querySelector('%s');
+					if (!el) return null;
+					
+					const rect = el.getBoundingClientRect();
+					const style = window.getComputedStyle(el);
+					
+					return {
+						x: Math.round(rect.left),
+						y: Math.round(rect.top),
+						width: Math.round(rect.width),
+						height: Math.round(rect.height),
+						opacity: style.opacity,
+						display: style.display,
+						visibility: style.visibility,
+						transform: style.transform,
+						animation: style.animationName,
+						transition: style.transitionProperty
+					};
+				})();
+			`, selector), &currentState),
+		)
+		
+		if err != nil || currentState == nil {
+			log.Printf("⚠️ Stabilization check failed, attempt %d/%d", i+1, maxStabilizationAttempts)
+			time.Sleep(300 * time.Millisecond)
+			continue
+		}
+		
+		// Compare with previous state
+		if previousState != nil {
+			stable := true
+			for key, value := range currentState {
+				if prevValue, exists := previousState[key]; !exists || prevValue != value {
+					stable = false
+					break
+				}
+			}
+			
+			if stable {
+				log.Printf("✅ Element stabilized after %d attempts", i+1)
+				return
+			}
+		}
+		
+		previousState = currentState
+		time.Sleep(300 * time.Millisecond)
+	}
+	
+	log.Printf("⚠️ Element may not be fully stabilized after %d attempts", maxStabilizationAttempts)
 }
 
 // debugPageStructure logs the current page structure to help debug selector issues
