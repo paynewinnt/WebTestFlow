@@ -401,9 +401,11 @@ class ApiService {
     description: string;
     project_id: number;
     environment_id: number;
+    device_id: number;
     expected_result: string;
     tags: string;
-    steps?: TestStep[]; // 支持传递包含验证码标记的步骤
+    priority?: number;
+    steps?: TestStep[]; // 发送TestStep数组，符合后端期望
   }): Promise<TestCase> {
     const response = await this.instance.post<ApiResponse<TestCase>>('/recording/save', data);
     return response.data.data!;

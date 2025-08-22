@@ -24,14 +24,28 @@ const CaptchaMarker: React.FC<CaptchaMarkerProps> = ({
   // 当步骤变化时更新表单字段
   useEffect(() => {
     if (step && visible) {
-      form.setFieldsValue({
-        captcha_type: 'image_ocr',
-        captcha_selector: step.selector,
-        input_selector: step.selector,
-        slider_selector: step.selector,
-        captcha_timeout: 60,
-      });
-      setCaptchaType('image_ocr');
+      // 如果步骤已经被标记为验证码，则预填充现有数据
+      if (step.is_captcha) {
+        form.setFieldsValue({
+          captcha_type: step.captcha_type || 'image_ocr',
+          captcha_selector: step.captcha_selector || step.selector,
+          input_selector: step.captcha_input_selector || step.selector,
+          slider_selector: step.captcha_selector || step.selector,
+          captcha_phone: step.captcha_phone || '',
+          captcha_timeout: step.captcha_timeout || 60,
+        });
+        setCaptchaType(step.captcha_type || 'image_ocr');
+      } else {
+        // 新标记验证码，使用默认值
+        form.setFieldsValue({
+          captcha_type: 'image_ocr',
+          captcha_selector: step.selector,
+          input_selector: step.selector,
+          slider_selector: step.selector,
+          captcha_timeout: 60,
+        });
+        setCaptchaType('image_ocr');
+      }
     }
   }, [step, visible, form]);
 
@@ -68,7 +82,7 @@ const CaptchaMarker: React.FC<CaptchaMarkerProps> = ({
       title={
         <Space>
           <SecurityScanOutlined />
-          标记验证码步骤
+          {step?.is_captcha ? '编辑验证码标记' : '标记验证码步骤'}
         </Space>
       }
       open={visible}

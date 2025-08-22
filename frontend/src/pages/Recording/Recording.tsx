@@ -136,7 +136,34 @@ const Recording: React.FC = () => {
 
       // Get final recording status
       const status = await api.getRecordingStatus(sessionId);
-      setRecordedSteps(status.steps || []);
+      
+      // 保留验证码标记：合并当前的验证码标记到最新的步骤数据中
+      const latestSteps = status.steps || [];
+      setRecordedSteps(prev => {
+        // 如果当前已有验证码标记的步骤，需要保留这些标记
+        if (prev && prev.length > 0) {
+          console.log('🔄 合并验证码标记到最新步骤数据中');
+          const mergedSteps = latestSteps.map((latestStep: any, index: number) => {
+            const currentStep = prev[index];
+            if (currentStep && currentStep.is_captcha) {
+              // 保留验证码标记信息
+              return {
+                ...latestStep,
+                is_captcha: currentStep.is_captcha,
+                captcha_type: currentStep.captcha_type,
+                captcha_selector: currentStep.captcha_selector,
+                captcha_input_selector: currentStep.captcha_input_selector,
+                captcha_phone: currentStep.captcha_phone,
+                captcha_timeout: currentStep.captcha_timeout,
+              };
+            }
+            return latestStep;
+          });
+          console.log('✅ 验证码标记合并完成，保留的验证码步骤数:', mergedSteps.filter((s: any) => s.is_captcha).length);
+          return mergedSteps;
+        }
+        return latestSteps;
+      });
 
       message.success('录制已停止');
     } catch (error) {
@@ -154,18 +181,22 @@ const Recording: React.FC = () => {
         return;
       }
       
-      // 尝试从localStorage获取最新的步骤数据作为fallback
+      // 使用recordedSteps作为最终步骤数据
       let finalSteps = recordedSteps;
+      
+      // 只在调试时记录localStorage中的数据，但不使用它替换实际步骤
       try {
         const debugSteps = localStorage.getItem('debug_recordedSteps');
         if (debugSteps) {
           const parsedSteps = JSON.parse(debugSteps);
           const debugCaptchaCount = parsedSteps.filter((s: any) => s.is_captcha).length;
           console.log('🔍 localStorage中的验证码步骤数量:', debugCaptchaCount);
+          console.log('🔍 localStorage中的步骤总数:', parsedSteps.length);
+          console.log('📋 实际recordedSteps步骤总数:', recordedSteps.length);
           
-          if (debugCaptchaCount > 0 && recordedSteps.filter(s => s.is_captcha).length === 0) {
-            console.log('⚡ 使用localStorage中的最新步骤数据');
-            finalSteps = parsedSteps;
+          // 警告：不再使用localStorage替换步骤数据，避免丢失步骤
+          if (parsedSteps.length !== recordedSteps.length) {
+            console.warn('⚠️ localStorage步骤数与实际步骤数不匹配，使用实际步骤数据');
           }
         }
       } catch (e) {
@@ -203,7 +234,7 @@ const Recording: React.FC = () => {
         expected_result: values.expected_result,
         tags: values.tags || '',
         priority: values.priority || 2,
-        steps: finalSteps, // 使用修复后的步骤数据，包含验证码标记
+        steps: finalSteps, // 发送TestStep数组，符合后端期望
       };
 
       await api.saveRecording(saveData);

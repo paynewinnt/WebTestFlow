@@ -36,10 +36,12 @@ import {
   ClockCircleOutlined,
   MoreOutlined,
   StopOutlined,
+  SecurityScanOutlined,
 } from '@ant-design/icons';
 import { api } from '../../services/api';
 import type { TestCase, Project, Environment, Device, TestStep } from '../../types';
 import type { ColumnsType } from 'antd/es/table';
+import CaptchaMarker from '../../components/CaptchaMarker/CaptchaMarker';
 
 const { Title, Text } = Typography;
 const { TextArea } = Input;
@@ -57,6 +59,11 @@ interface StepsEditorProps {
 const StepsEditor: React.FC<StepsEditorProps> = ({ visible, testCase, onClose, onSave }) => {
   const [steps, setSteps] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  
+  // Captcha marking states
+  const [captchaModalVisible, setCaptchaModalVisible] = useState(false);
+  const [selectedStep, setSelectedStep] = useState<TestStep | null>(null);
+  const [selectedStepIndex, setSelectedStepIndex] = useState(0);
 
   useEffect(() => {
     if (testCase && visible) {
@@ -74,6 +81,35 @@ const StepsEditor: React.FC<StepsEditorProps> = ({ visible, testCase, onClose, o
     const newSteps = [...steps];
     newSteps[index] = { ...newSteps[index], [field]: value };
     setSteps(newSteps);
+  };
+
+  const handleMarkAsCaptcha = (step: TestStep, index: number) => {
+    setSelectedStep(step);
+    setSelectedStepIndex(index);
+    setCaptchaModalVisible(true);
+  };
+
+  const handleCaptchaMark = (markedStep: TestStep) => {
+    const newSteps = [...steps];
+    newSteps[selectedStepIndex] = { ...markedStep };
+    setSteps(newSteps);
+    setCaptchaModalVisible(false);
+    message.success('验证码标记设置成功！请点击右上角"保存"按钮保存修改');
+  };
+
+  const handleRemoveCaptchaMark = (index: number) => {
+    const newSteps = [...steps];
+    newSteps[index] = {
+      ...newSteps[index],
+      is_captcha: false,
+      captcha_type: '',
+      captcha_selector: '',
+      captcha_input_selector: '',
+      captcha_phone: '',
+      captcha_timeout: 0,
+    };
+    setSteps(newSteps);
+    message.success('已取消验证码标记');
   };
 
   const handleSave = () => {
@@ -115,6 +151,22 @@ const StepsEditor: React.FC<StepsEditorProps> = ({ visible, testCase, onClose, o
     }
   };
 
+  // 检查步骤是否为验证码步骤的函数
+  const isCaptchaStep = (step: any) => {
+    const { is_captcha, IsCaptcha } = step;
+    
+    // 检查多种可能的字段名和值
+    const captchaValue = is_captcha !== undefined ? is_captcha : IsCaptcha;
+    
+    // 支持多种数据类型的真值判断
+    return captchaValue === true || 
+           captchaValue === 'true' || 
+           captchaValue === 1 || 
+           captchaValue === '1' ||
+           captchaValue === 'True' ||
+           captchaValue === 'TRUE';
+  };
+
   return (
     <Drawer
       title={`编辑测试步骤 - ${testCase?.name || ''}`}
@@ -128,9 +180,32 @@ const StepsEditor: React.FC<StepsEditorProps> = ({ visible, testCase, onClose, o
       }
     >
       <div style={{ marginBottom: 16 }}>
-        <Text type="secondary">
-          共 {steps.length} 个步骤，您可以为每个步骤设置执行前的等待时间和是否跳过该步骤
-        </Text>
+        <Space direction="vertical" size={4}>
+          <Text type="secondary">
+            共 {steps.length} 个步骤，您可以为每个步骤设置执行前的等待时间和是否跳过该步骤
+          </Text>
+          {steps.filter(step => isCaptchaStep(step)).length > 0 && (
+            <div style={{ 
+              padding: '8px 12px', 
+              backgroundColor: '#f6ffed', 
+              border: '1px solid #b7eb8f', 
+              borderRadius: '4px',
+              display: 'inline-block'
+            }}>
+              <Space>
+                <SecurityScanOutlined style={{ color: '#52c41a' }} />
+                <Text style={{ color: '#52c41a', fontWeight: 'bold' }}>
+                  包含 {steps.filter(step => isCaptchaStep(step)).length} 个验证码步骤
+                </Text>
+                <Text type="secondary" style={{ fontSize: '12px' }}>
+                  (图形: {steps.filter(step => isCaptchaStep(step) && step.captcha_type === 'image_ocr').length}, 
+                   短信: {steps.filter(step => isCaptchaStep(step) && step.captcha_type === 'sms').length}, 
+                   滑块: {steps.filter(step => isCaptchaStep(step) && step.captcha_type === 'sliding').length})
+                </Text>
+              </Space>
+            </div>
+          )}
+        </Space>
       </div>
       
       <Collapse ghost>
@@ -156,6 +231,11 @@ const StepsEditor: React.FC<StepsEditorProps> = ({ visible, testCase, onClose, o
                   {step.skip_step && (
                     <Tooltip title="此步骤将被跳过">
                       <StopOutlined style={{ color: '#ff4d4f' }} />
+                    </Tooltip>
+                  )}
+                  {isCaptchaStep(step) && (
+                    <Tooltip title={`验证码类型: ${step.captcha_type === 'image_ocr' ? '图形验证码' : step.captcha_type === 'sms' ? '短信验证码' : '滑块验证码'}`}>
+                      <SecurityScanOutlined style={{ color: '#52c41a' }} />
                     </Tooltip>
                   )}
                 </Space>
@@ -209,6 +289,83 @@ const StepsEditor: React.FC<StepsEditorProps> = ({ visible, testCase, onClose, o
                         开启后，执行测试时将跳过此步骤
                       </Text>
                     </div>
+                    <div>
+                      <label style={{ fontWeight: 'bold', marginBottom: 4, display: 'block' }}>
+                        <SecurityScanOutlined style={{ marginRight: 4 }} />
+                        验证码标记
+                      </label>
+                      {isCaptchaStep(step) ? (
+                        <div style={{ 
+                          padding: '12px', 
+                          backgroundColor: '#f6ffed', 
+                          border: '1px solid #b7eb8f', 
+                          borderRadius: '6px',
+                          marginBottom: '8px'
+                        }}>
+                          <div style={{ marginBottom: 8 }}>
+                            <Tag color="green" icon={<SecurityScanOutlined />} style={{ marginBottom: 4 }}>
+                              {step.captcha_type === 'image_ocr' && '图形验证码'}
+                              {step.captcha_type === 'sms' && '短信验证码'}
+                              {step.captcha_type === 'sliding' && '滑块验证码'}
+                            </Tag>
+                          </div>
+                          
+                          {step.captcha_type === 'sms' && step.captcha_phone && (
+                            <div style={{ fontSize: '12px', color: '#666', marginBottom: 4 }}>
+                              <Text type="secondary">手机号: {step.captcha_phone}</Text>
+                            </div>
+                          )}
+                          
+                          {step.captcha_selector && (
+                            <div style={{ fontSize: '12px', color: '#666', marginBottom: 4 }}>
+                              <Text type="secondary">验证码选择器: </Text>
+                              <Text code style={{ fontSize: '11px' }}>{step.captcha_selector}</Text>
+                            </div>
+                          )}
+                          
+                          {step.captcha_input_selector && (
+                            <div style={{ fontSize: '12px', color: '#666', marginBottom: 4 }}>
+                              <Text type="secondary">输入框选择器: </Text>
+                              <Text code style={{ fontSize: '11px' }}>{step.captcha_input_selector}</Text>
+                            </div>
+                          )}
+                          
+                          {step.captcha_timeout && step.captcha_timeout > 0 && (
+                            <div style={{ fontSize: '12px', color: '#666', marginBottom: 8 }}>
+                              <Text type="secondary">等待超时: {step.captcha_timeout}秒</Text>
+                            </div>
+                          )}
+                          
+                          <Space>
+                            <Button 
+                              size="small" 
+                              icon={<EditOutlined />}
+                              onClick={() => handleMarkAsCaptcha(step as TestStep, index)}
+                            >
+                              修改配置
+                            </Button>
+                            <Button 
+                              size="small" 
+                              danger
+                              icon={<DeleteOutlined />}
+                              onClick={() => handleRemoveCaptchaMark(index)}
+                            >
+                              取消标记
+                            </Button>
+                          </Space>
+                        </div>
+                      ) : (
+                        <Button 
+                          icon={<SecurityScanOutlined />}
+                          onClick={() => handleMarkAsCaptcha(step as TestStep, index)}
+                        >
+                          标记验证码
+                        </Button>
+                      )}
+                      <Text type="secondary" style={{ fontSize: '12px', display: 'block', marginTop: 4 }}>
+                        标记此步骤为验证码处理步骤
+                      </Text>
+                    </div>
                   </Space>
                 </Col>
                 <Col span={12}>
@@ -244,6 +401,14 @@ const StepsEditor: React.FC<StepsEditorProps> = ({ visible, testCase, onClose, o
           该测试用例暂无步骤数据
         </div>
       )}
+
+      <CaptchaMarker
+        visible={captchaModalVisible}
+        step={selectedStep}
+        stepIndex={selectedStepIndex}
+        onClose={() => setCaptchaModalVisible(false)}
+        onMark={handleCaptchaMark}
+      />
     </Drawer>
   );
 };
@@ -456,6 +621,7 @@ const TestCases: React.FC = () => {
       return <Text type="secondary">步骤数据格式错误</Text>;
     }
   };
+
 
   const columns: ColumnsType<TestCase> = [
     {

@@ -1078,6 +1078,22 @@ func getRecordingScript() string {
 				
 				// Early rejection: check for cookiePart in original event (more precise check)
 				if (this.hasProblematicContent(event)) {
+					console.log('📝 Attempting to clean problematic event:', event.type, event.selector?.substring(0, 50));
+					// Try to salvage user actions even if they have problematic metadata
+					if (event.type && (event.selector || event.coordinates)) {
+						// Create minimal clean event with just essential data
+						const minimalEvent = {
+							type: event.type,
+							selector: event.selector || '',
+							value: event.value || '',
+							coordinates: event.coordinates || {},
+							timestamp: event.timestamp || Date.now(),
+							options: {} // Empty options to avoid problematic data
+						};
+						console.log('✅ Salvaged user action by removing problematic metadata');
+						return minimalEvent;
+					}
+					console.log('❌ Could not salvage event, filtering out');
 					return null;
 				}
 				
@@ -1144,27 +1160,50 @@ func getRecordingScript() string {
 				// First, test basic JSON serialization
 				JSON.stringify(event);
 				
+				// Only filter out events that are truly problematic, not user actions
+				// User actions should have type, selector/coordinates
+				const isUserAction = event.type && (
+					event.type === 'click' || 
+					event.type === 'input' || 
+					event.type === 'scroll' ||
+					event.type === 'keydown' ||
+					event.type === 'navigate' ||
+					event.type === 'touchstart' ||
+					event.type === 'touchend' ||
+					event.type === 'mousedrag'
+				);
+				
+				// If it's a user action with valid selector or coordinates, keep it
+				if (isUserAction && (event.selector || event.coordinates)) {
+					// Don't filter user actions even if they have problematic metadata
+					return false;
+				}
+				
 				// Quick property check - be more specific about what we're looking for
 				for (const [key, value] of Object.entries(event)) {
-					// Check key names
+					// Check key names - but exclude essential fields
+					if (key === 'type' || key === 'selector' || key === 'value' || key === 'coordinates' || key === 'timestamp') {
+						continue; // Don't check essential fields
+					}
+					
 					if (typeof key === 'string' && key.toLowerCase().includes('cookiepart')) {
-						console.log('FILTERED hasProblematicContent: Found cookiePart in key:', key);
+						console.log('FILTERED hasProblematicContent: Found cookiePart in non-essential key:', key);
 						return true;
 					}
 					
-					// Check string values more carefully
-					if (typeof value === 'string') {
+					// Check string values more carefully - but not in essential fields
+					if (typeof value === 'string' && key !== 'selector' && key !== 'value' && key !== 'type') {
 						const lowerValue = value.toLowerCase();
 						if (lowerValue.includes('cookiepart') || 
 							lowerValue.includes('navigationreason') ||
 							lowerValue.includes('clientnavigationreason')) {
-							console.log('FILTERED hasProblematicContent: Found problematic pattern in value:', value.substring(0, 50));
+							console.log('FILTERED hasProblematicContent: Found problematic pattern in non-essential value:', value.substring(0, 50));
 							return true;
 						}
 					}
 					
-					// Check nested objects (but not too deeply)
-					if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+					// Check nested objects (but not too deeply) - skip for essential data
+					if (typeof value === 'object' && value !== null && !Array.isArray(value) && key !== 'coordinates' && key !== 'options') {
 						try {
 							const valueStr = JSON.stringify(value);
 							if (valueStr.includes('cookiePart') || 
@@ -1271,21 +1310,34 @@ func getRecordingScript() string {
 							  'direction', 'moves', 'inputType', 'type', 'isWindow', 'scrollHeight',
 							  'clientHeight', 'deltaY', 'method', 'action', 'trigger', 'fromURL', 'toURL'];
 			
+			// First, try to preserve all safe keys even if they might have problematic patterns
 			for (let key of safeKeys) {
 				if (key in options) {
 					const value = options[key];
 					
-					// Skip functions, undefined, null, and complex objects
+					// Skip functions, undefined, null
 					if (typeof value === 'function' || value === undefined || value === null) {
 						continue;
 					}
 					
 					// Handle different value types safely
 					if (typeof value === 'string') {
-						// Use safeString to filter problematic content
-						const cleanStr = this.safeString(value, '');
-						if (cleanStr.length > 0 && cleanStr.length <= 500) {
-							cleaned[key] = cleanStr;
+						// For essential navigation fields, keep them even if they have patterns
+						if (key === 'fromURL' || key === 'toURL' || key === 'elementText' || key === 'tagName') {
+							// Just remove the most problematic patterns, keep the useful data
+							let cleanStr = value;
+							cleanStr = cleanStr.replace(/cookiePart[^\s\n\r]*/gi, '');
+							cleanStr = cleanStr.replace(/NavigationReason[^\s\n\r]*/gi, '');
+							cleanStr = cleanStr.replace(/ClientNavigationReason[^\s\n\r]*/gi, '');
+							if (cleanStr.length > 0 && cleanStr.length <= 500) {
+								cleaned[key] = cleanStr;
+							}
+						} else {
+							// Use safeString for other fields
+							const cleanStr = this.safeString(value, '');
+							if (cleanStr.length > 0 && cleanStr.length <= 500) {
+								cleaned[key] = cleanStr;
+							}
 						}
 					} else if (typeof value === 'number' && isFinite(value)) {
 						cleaned[key] = value;
