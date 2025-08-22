@@ -579,11 +579,10 @@ func (r *ChromeRecorder) enhancedCrossDomainReinject() {
 					}
 					
 					console.log('🧹 Cross-domain cleanup completed');
-					return true;
 				} catch (e) {
 					console.warn('Cross-domain cleanup error:', e);
-					return false;
 				}
+				return true;
 			`, nil))
 
 		if err != nil {
@@ -814,29 +813,72 @@ func (rm *RecorderManager) CleanupRecording(sessionID string) error {
 func getRecordingScript() string {
 	return `
 (function() {
+	// Track if we need to reinitialize or just reattach listeners (must be outside try-catch)
+	let needsFullInit = true;
+	let needsListeners = true;
+	
 	try {
 		console.log('🎬 Initializing autoUIRecorder (minimal protection mode)...');
 		
 		// Check if recorder already exists and is functional
-		if (window.autoUIRecorder) {
-			console.log('🎬 autoUIRecorder already exists, checking if functional...');
-			if (typeof window.autoUIRecorder.addEvent === 'function') {
-				console.log('🎬 Existing recorder is functional, skipping re-init');
-				return;
-			} else {
-				console.log('🎬 Existing recorder is broken, reinitializing...');
+		if (window.autoUIRecorder && typeof window.autoUIRecorder.addEvent === 'function') {
+			console.log('🎬 autoUIRecorder already exists and is functional');
+			needsFullInit = false; // Don't reinitialize the recorder object
+			
+			// CRITICAL: Always check if event listeners actually work, not just the flag
+			// Use a simple test to verify if our click listeners are working
+			let listenersWorking = false;
+			try {
+				// Method 1: Check our custom flag and test if recorder can receive events
+				if (window.__uiRecorderListenersAttached && window.autoUIRecorder.testEventCapture) {
+					// Test if our event capture system is working
+					listenersWorking = window.autoUIRecorder.testEventCapture();
+				} else {
+					// Method 2: Fallback - check if document has our specific event handlers
+					listenersWorking = window.__uiRecorderListenersAttached && 
+									   document.addEventListener && 
+									   window.autoUIRecorder._hasClickListener === true;
+				}
+			} catch (e) {
+				console.log('🔍 Listener test failed:', e.message);
+				// After cross-domain navigation, assume listeners are lost
+				listenersWorking = false;
 			}
+			
+			if (listenersWorking) {
+				console.log('✅ Recorder and listeners are intact, skipping re-init');
+				return; // Everything is working, skip all initialization
+			} else {
+				console.log('⚠️ Event listeners missing or not working after navigation, will reattach them');
+				needsListeners = true; // Need to attach listeners
+				window.__uiRecorderListenersAttached = false; // Reset the flag
+				window.autoUIRecorder._hasClickListener = false; // Reset click listener flag
+			}
+		} else if (window.autoUIRecorder) {
+			console.log('🎬 Existing recorder is broken, reinitializing everything...');
+			needsFullInit = true;
+			needsListeners = true;
+		} else {
+			console.log('🎬 No existing recorder, full initialization needed');
+			needsFullInit = true;
+			needsListeners = true;
 		}
 		
-		console.log('🎬 No anti-debugging protection - preserving page functionality');
+		console.log('🎬 Initialization decision: fullInit=' + needsFullInit + ', listeners=' + needsListeners);
 	} catch (e) {
 		console.warn('🎬 Error in recorder initialization safety checks:', e);
+		// On error, do full initialization
+		needsFullInit = true;
+		needsListeners = true;
 	}
 	
-	window.autoUIRecorder = {
-		events: [],
-		sentIndex: 0,
-		isRecording: true,
+	// Only reinitialize the recorder object if needed
+	if (needsFullInit) {
+		console.log('🔧 Creating new autoUIRecorder object...');
+		window.autoUIRecorder = {
+			events: [],
+			sentIndex: 0,
+			isRecording: true,
 		lastScrollTime: 0,
 		lastScrollTarget: null,
 		lastScrollX: -1,
@@ -1565,8 +1607,62 @@ func getRecordingScript() string {
 				pageX: event.pageX,
 				pageY: event.pageY
 			};
-		}
-	};
+		},
+		
+		// Test if event capture system is working properly
+		testEventCapture: function() {
+			try {
+				// Method 1: Check if our click handler flag is set
+				if (this._hasClickListener === true) {
+					console.log('🔍 Click listener flag indicates listeners are attached');
+					return true;
+				}
+				
+				// Method 2: Try to trigger a synthetic test event and see if it's captured
+				let testPassed = false;
+				const originalAddEvent = this.addEvent;
+				
+				// Temporarily intercept addEvent to test
+				this.addEvent = function(event) {
+					if (event && event.type === '__test_event__') {
+						testPassed = true;
+						return;
+					}
+					originalAddEvent.call(this, event);
+				};
+				
+				// Create a minimal test event
+				const testEvent = {
+					type: '__test_event__',
+					selector: 'test',
+					timestamp: Date.now()
+				};
+				
+				// Try to add the test event
+				this.addEvent(testEvent);
+				
+				// Restore original addEvent
+				this.addEvent = originalAddEvent;
+				
+				console.log('🔍 Event capture test result:', testPassed);
+				return testPassed;
+			} catch (e) {
+				console.log('🔍 Event capture test failed:', e.message);
+				return false;
+			}
+		},
+		
+		// Flag to track if click listeners are attached
+		_hasClickListener: false
+	}; // End of autoUIRecorder object definition
+		console.log('✅ autoUIRecorder object created/preserved');
+	} else {
+		console.log('♻️ Reusing existing autoUIRecorder object with ' + window.autoUIRecorder.events.length + ' events');
+	}
+	
+	// Only attach event listeners if needed
+	if (needsListeners) {
+		console.log('🎯 Attaching event listeners...');
 	
 	// Check if we're in mobile device emulation mode
 	let isInDeviceMode = (window.innerWidth <= 768) || 
@@ -1727,16 +1823,52 @@ func getRecordingScript() string {
 			
 			window.autoUIRecorder.addEvent(clickEvent);
 			
-			// Check if click might cause navigation
+			// Enhanced navigation detection for clicks
 			const target = event.target;
 			const href = target.href || target.closest('a')?.href;
-			if (href && href !== window.location.href) {
-				// Record potential navigation
+			const currentURL = window.location.href;
+			
+			// Pre-record navigation intention if clicking on link/button that might navigate
+			if (href || target.onclick || target.closest('[onclick]') || target.type === 'submit') {
+				console.log('📍 Potential navigation trigger detected:', {
+					href: href,
+					hasOnClick: !!target.onclick,
+					tagName: target.tagName,
+					type: target.type
+				});
+				
+				// Enhanced navigation detection with multiple strategies
 				setTimeout(() => {
-					if (window.location.href !== href && window.location.href.includes(href.split('#')[0])) {
-						console.log('Navigation detected after click:', window.location.href);
+					const newURL = window.location.href;
+					if (newURL !== currentURL) {
+						console.log('SUCCESS Navigation confirmed after click:', currentURL, '→', newURL);
+						
+						// Record the actual navigation event
+						window.autoUIRecorder.addEvent({
+							type: 'navigate',
+							selector: '',
+							value: newURL,
+							coordinates: { x: 0, y: 0 },
+							timestamp: Date.now(),
+							options: {
+								trigger: 'click_navigation',
+								from_url: currentURL,
+								to_url: newURL,
+								trigger_element: target.tagName.toLowerCase(),
+								trigger_text: target.textContent ? target.textContent.trim().substring(0, 50) : ''
+							}
+						});
+					} else {
+						// Even if URL didn't change, check if page content changed significantly
+						const currentTitle = document.title;
+						setTimeout(() => {
+							if (document.title !== currentTitle || document.readyState !== 'complete') {
+								console.log('Page content change detected after click');
+								// This might be SPA navigation or dynamic content loading
+							}
+						}, 200);
 					}
-				}, 100);
+				}, 150); // Slightly longer delay to catch slower navigations
 			}
 		}
 	}, true);
@@ -2443,26 +2575,81 @@ func getRecordingScript() string {
 					}
 				});
 				
-				// Force immediate event flush before page unloads
+				// Enhanced immediate event flush for cross-domain navigation
 				try {
-					console.log('Forcing immediate event flush before navigation');
-					// This will be picked up by the next polling cycle
+					console.log('🚪 Enhanced event flush before cross-domain navigation');
+					
+					// Mark navigation context in session storage for recovery
+					try {
+						sessionStorage.setItem('wtf_last_navigation', JSON.stringify({
+							from_url: window.location.href,
+							timestamp: Date.now(),
+							event_count: window.autoUIRecorder.events.length,
+							navigation_type: 'beforeunload'
+						}));
+					} catch (storageError) {
+						console.warn('Cannot save navigation context:', storageError);
+					}
+					
+					// Force immediate WebSocket transmission if available
+					if (window.autoUIRecorder.wsConnection && window.autoUIRecorder.wsConnection.readyState === WebSocket.OPEN) {
+						window.autoUIRecorder.wsConnection.send(JSON.stringify({
+							type: 'navigation_flush',
+							events: window.autoUIRecorder.events.slice(window.autoUIRecorder.sentIndex)
+						}));
+					}
+					
 				} catch (e) {
-					console.warn('Error during beforeunload event handling:', e);
+					console.warn('Error during enhanced beforeunload handling:', e);
 				}
 			}
 		}
 	}, true);
 	
-	// Enhanced DOMContentLoaded listener for page navigation detection
+	// Enhanced DOMContentLoaded listener with cross-domain navigation recovery
 	if (document.readyState === 'loading') {
 		document.addEventListener('DOMContentLoaded', function() {
-			console.log('DOMContentLoaded detected - page may have navigated');
+			console.log('📄 DOMContentLoaded detected - checking for cross-domain navigation');
+			
 			// Re-announce recorder presence
 			if (window.autoUIRecorder) {
-				console.log('Recorder still present after DOMContentLoaded');
+				console.log('SUCCESS Recorder still present after DOMContentLoaded');
+				
+				// Check for navigation context from previous page
+				try {
+					const navigationInfo = sessionStorage.getItem('wtf_last_navigation');
+					if (navigationInfo) {
+						const navData = JSON.parse(navigationInfo);
+						const currentURL = window.location.href;
+						
+						if (navData.from_url && navData.from_url !== currentURL) {
+							console.log('🌐 Cross-domain navigation detected via sessionStorage:', navData.from_url, '→', currentURL);
+							
+							// Record the completed navigation event
+							window.autoUIRecorder.addEvent({
+								type: 'cross_domain_navigation',
+								selector: '',
+								value: currentURL,
+								coordinates: { x: 0, y: 0 },
+								timestamp: Date.now(),
+								options: {
+									trigger: 'dom_content_loaded',
+									from_url: navData.from_url,
+									to_url: currentURL,
+									previous_event_count: navData.event_count,
+									navigation_recovery: true
+								}
+							});
+							
+							// Clear the navigation marker
+							sessionStorage.removeItem('wtf_last_navigation');
+						}
+					}
+				} catch (e) {
+					console.warn('Error processing navigation recovery:', e);
+				}
 			} else {
-				console.warn('Recorder missing after DOMContentLoaded - may need reinjection');
+				console.warn('❌ Recorder missing after DOMContentLoaded - reinjection needed');
 			}
 		});
 	}
@@ -2544,8 +2731,15 @@ func getRecordingScript() string {
 		return code;
 	};
 	
-	// Recorder initialization complete
+	// Mark that event listeners have been attached
+	window.__uiRecorderListenersAttached = true;
+	window.autoUIRecorder._hasClickListener = true;
+	console.log('✅ Event listeners attached successfully');
+	} else {
+		console.log('♻️ Event listeners already attached, skipping');
+	}
 	
+	// Recorder initialization complete
 	console.log('🎬 ✅ AutoUIRecorder initialized successfully!');
 	
 })();
