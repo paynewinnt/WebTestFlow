@@ -63,6 +63,7 @@ type TestStep struct {
 	Screenshot  string                 `json:"screenshot"`  // Screenshot path if needed
 	Description string                 `json:"description"` // Step description for editing
 	WaitBefore  int                    `json:"wait_before"` // Wait time before executing this step (in seconds)
+	WaitType    string                 `json:"wait_type"`   // Wait strategy: "smart" (default) or "fixed"
 	SkipStep    bool                   `json:"skip_step"`   // Whether to skip this step during execution
 	
 	// 验证码相关字段

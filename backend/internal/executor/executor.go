@@ -356,10 +356,11 @@ func (te *TestExecutor) executeTestCase(executionID uint, testCase *models.TestC
 	debugURL := fmt.Sprintf("http://localhost:%d", port)
 	result.addLog("info", fmt.Sprintf("🔗 Connecting to Chrome at %s", debugURL), -1)
 
-	// 创建带超时的上下文
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	// 创建带超时的上下文 - 增加超时时间以适应长时间测试用例
+	timeoutDuration := 10 * time.Minute // 从2分钟增加到10分钟
+	ctx, cancel := context.WithTimeout(context.Background(), timeoutDuration)
 	defer cancel()
-	result.addLog("info", "📋 Created main context with timeout", -1)
+	result.addLog("info", fmt.Sprintf("📋 Created main context with %v timeout", timeoutDuration), -1)
 
 	// 连接到已运行的Chrome实例
 	result.addLog("info", "🔌 Creating remote allocator connection...", -1)
@@ -590,18 +591,56 @@ func (te *TestExecutor) executeTestCase(executionID uint, testCase *models.TestC
 
 		// Check if step needs wait before execution
 		if step.WaitBefore > 0 {
-			waitDuration := time.Duration(step.WaitBefore) * time.Second
-			log.Printf("⏳ 步骤 %d/%d - 等待 %d 秒后执行: %s", i+1, totalSteps, step.WaitBefore, detailedDesc)
-			result.addStepLog("info", fmt.Sprintf("等待 %d 秒后执行步骤 %d/%d", step.WaitBefore, i+1, totalSteps), i,
-				"wait", "running", "", fmt.Sprintf("%d", step.WaitBefore), "", 0, "")
+			waitTime := time.Duration(step.WaitBefore) * time.Second
+			waitType := step.WaitType
 			
-			// Context-aware wait
-			select {
-			case <-time.After(waitDuration):
-				log.Printf("✅ 等待完成，开始执行步骤 %d/%d", i+1, totalSteps)
-			case <-ctx.Done():
-				result.ErrorMessage = fmt.Sprintf("步骤 %d 等待过程中被取消", i+1)
-				return result
+			// Default to smart wait if not specified
+			if waitType == "" {
+				waitType = "smart"
+			}
+			
+			if waitType == "fixed" {
+				// Fixed wait - always wait the full duration
+				log.Printf("⏰ 步骤 %d/%d - 固定等待 %d 秒: %s", i+1, totalSteps, step.WaitBefore, detailedDesc)
+				result.addStepLog("info", fmt.Sprintf("固定等待 %d 秒，步骤 %d/%d", step.WaitBefore, i+1, totalSteps), i,
+					"fixed_wait", "running", step.Selector, fmt.Sprintf("%d", step.WaitBefore), "", 0, "")
+				
+				err := te.performFixedWait(ctx, waitTime, i+1, totalSteps, &result)
+				if err != nil {
+					log.Printf("❌ 固定等待失败: %v", err)
+					result.ErrorMessage = fmt.Sprintf("步骤 %d 固定等待失败: %v", i+1, err)
+					return result
+				}
+				
+				log.Printf("✅ 固定等待完成，开始执行步骤 %d/%d", i+1, totalSteps)
+				result.addStepLog("info", fmt.Sprintf("固定等待完成，开始执行步骤 %d/%d", i+1, totalSteps), i,
+					"fixed_wait", "completed", step.Selector, fmt.Sprintf("%d", step.WaitBefore), "", 0, "")
+			} else {
+				// Smart wait - try to execute early when element is ready
+				log.Printf("🎯 步骤 %d/%d - 智能等待 %d 秒内元素可用: %s", i+1, totalSteps, step.WaitBefore, detailedDesc)
+				result.addStepLog("info", fmt.Sprintf("智能等待 %d 秒内元素可用，步骤 %d/%d", step.WaitBefore, i+1, totalSteps), i,
+					"smart_wait", "running", step.Selector, fmt.Sprintf("%d", step.WaitBefore), "", 0, "")
+				
+				// Perform smart wait with early execution and retry mechanism
+				executed, err := te.performSmartWait(ctx, step, waitTime, i+1, totalSteps, &result)
+				
+				if err != nil {
+					log.Printf("❌ 智能等待失败: %v", err)
+					result.ErrorMessage = fmt.Sprintf("步骤 %d 智能等待失败: %v", i+1, err)
+					return result
+				}
+				
+				if executed {
+					// Step was executed during smart wait, continue to next step
+					log.Printf("✅ 步骤 %d/%d 在智能等待期间成功执行", i+1, totalSteps)
+					result.addStepLog("info", fmt.Sprintf("步骤 %d/%d 在智能等待期间成功执行", i+1, totalSteps), i,
+						"smart_wait", "completed", step.Selector, fmt.Sprintf("%d", step.WaitBefore), "", 0, "")
+					continue
+				}
+				
+				log.Printf("⏳ 智能等待完成，开始正常执行步骤 %d/%d", i+1, totalSteps)
+				result.addStepLog("info", fmt.Sprintf("智能等待完成，开始正常执行步骤 %d/%d", i+1, totalSteps), i,
+					"smart_wait", "completed", step.Selector, fmt.Sprintf("%d", step.WaitBefore), "", 0, "")
 			}
 		}
 
@@ -796,8 +835,14 @@ func (te *TestExecutor) executeClick(ctx context.Context, step models.TestStep) 
 
 		log.Printf("✓ Element exists in DOM: %s", selector)
 
-		// Enhanced element waiting with multiple strategies
-		err = te.waitForElementSmart(ctx, selector)
+		// Enhanced element waiting with timeout protection
+		log.Printf("🔍 开始智能等待元素: %s", selector)
+		
+		// Add step-level timeout to prevent hanging
+		stepCtx, stepCancel := context.WithTimeout(ctx, 20*time.Second)
+		defer stepCancel()
+		
+		err = te.waitForElementSmart(stepCtx, selector)
 
 		if err != nil {
 			log.Printf("❌ Element not ready for interaction: %s, error: %v", selector, err)
@@ -947,8 +992,15 @@ func (te *TestExecutor) extractClassSelectors(selector string) []string {
 
 // waitForElementSmart uses multiple strategies to wait for element availability
 func (te *TestExecutor) waitForElementSmart(ctx context.Context, selector string) error {
+	log.Printf("🔍 开始智能等待元素: %s", selector)
+	
+	// Add overall timeout to prevent infinite hanging
+	overallCtx, overallCancel := context.WithTimeout(ctx, 12*time.Second)
+	defer overallCancel()
+	
 	// Strategy 1: Standard wait for visible and enabled (shorter timeout for first attempt)
-	ctxShort, cancel1 := context.WithTimeout(ctx, 3*time.Second)
+	log.Printf("📋 策略1: 标准等待 (3秒)")
+	ctxShort, cancel1 := context.WithTimeout(overallCtx, 3*time.Second)
 	defer cancel1()
 	
 	err := chromedp.Run(ctxShort,
@@ -957,60 +1009,53 @@ func (te *TestExecutor) waitForElementSmart(ctx context.Context, selector string
 	)
 	
 	if err == nil {
-		log.Printf("✅ Standard wait successful for: %s", selector)
-		return nil // Success with standard approach
+		log.Printf("✅ 标准等待成功: %s", selector)
+		return nil
 	}
 	
-	log.Printf("⏳ Standard wait failed for %s, trying extended strategies: %v", selector, err)
+	log.Printf("⏳ 标准等待失败，尝试扩展策略: %v", selector, err)
 	
-	// Strategy 2: Enhanced progressive wait with page stability checks
-	ctxLong, cancel2 := context.WithTimeout(ctx, 25*time.Second)
-	defer cancel2()
+	// Strategy 2: Quick element existence check first
+	log.Printf("📋 策略2: 元素存在性检查")
+	var elementExists bool
+	checkCtx, checkCancel := context.WithTimeout(overallCtx, 2*time.Second)
+	defer checkCancel()
 	
-	// Step 1: Wait for page to be generally stable (DOM loading complete)
-	log.Printf("🔄 Waiting for page stability...")
-	for i := 0; i < 10; i++ { // 10 attempts * 1s = 10 seconds max for page stability
-		var pageReady bool
-		err = chromedp.Run(ctxLong, 
-			chromedp.Evaluate(`
-				(function() {
-					// Check multiple page readiness indicators
-					const docReady = document.readyState === 'complete';
-					const noActiveRequests = !window.fetch || window.fetch.toString().indexOf('[native code]') > -1;
-					const noLoadingElements = document.querySelectorAll('[class*="loading"], [class*="spinner"]').length === 0;
-					return docReady && noLoadingElements;
-				})();
-			`, &pageReady),
-		)
-		
-		if err == nil && pageReady {
-			log.Printf("✅ Page stability achieved after %d attempts", i+1)
-			break
+	err = chromedp.Run(checkCtx, chromedp.Evaluate(fmt.Sprintf(`
+		!!document.querySelector('%s')
+	`, selector), &elementExists))
+	
+	if err != nil || !elementExists {
+		log.Printf("❌ 元素不存在于DOM中: %s", selector)
+		return fmt.Errorf("element %s not found in DOM", selector)
+	}
+	log.Printf("✅ 元素存在于DOM中: %s", selector)
+	
+	// Strategy 3: Progressive wait with timeout protection
+	log.Printf("📋 策略3: 渐进式等待 (最多7秒)")
+	progressCtx, progressCancel := context.WithTimeout(overallCtx, 7*time.Second)
+	defer progressCancel()
+	
+	startTime := time.Now()
+	maxAttempts := 14 // 14 attempts * 500ms = 7 seconds max
+	
+	for i := 0; i < maxAttempts; i++ {
+		// Check if overall context is done
+		select {
+		case <-overallCtx.Done():
+			log.Printf("⏰ 智能等待超时，总耗时: %v", time.Since(startTime))
+			return fmt.Errorf("element wait timeout after %v", time.Since(startTime))
+		default:
 		}
 		
-		log.Printf("⏳ Page not ready, attempt %d/10", i+1)
-		time.Sleep(1 * time.Second)
-	}
-	
-	// Step 2: Wait for DOM element presence
-	log.Printf("🔍 Waiting for element in DOM: %s", selector)
-	err = chromedp.Run(ctxLong, chromedp.WaitReady(selector, chromedp.ByQuery))
-	if err != nil {
-		log.Printf("❌ Element not found in DOM: %s, error: %v", selector, err)
-		return err
-	}
-	
-	log.Printf("✅ Element found in DOM: %s", selector)
-	
-	// Step 3: Wait for element visibility and interactability with enhanced checks
-	log.Printf("🎯 Waiting for element visibility and interactability...")
-	for i := 0; i < 40; i++ { // 40 attempts * 500ms = 20 seconds max
+		log.Printf("🔍 检查元素状态 (尝试 %d/%d): %s", i+1, maxAttempts, selector)
+		
 		var elementState map[string]interface{}
-		err = chromedp.Run(ctxLong, 
+		err = chromedp.Run(progressCtx, 
 			chromedp.Evaluate(fmt.Sprintf(`
 				(function() {
 					const el = document.querySelector('%s');
-					if (!el) return {exists: false};
+					if (!el) return {exists: false, error: 'Element not found'};
 					
 					const rect = el.getBoundingClientRect();
 					const style = window.getComputedStyle(el);
@@ -1018,90 +1063,218 @@ func (te *TestExecutor) waitForElementSmart(ctx context.Context, selector string
 					                 style.visibility !== 'hidden' && 
 					                 style.display !== 'none' &&
 					                 style.opacity !== '0';
-					const isInteractable = !el.disabled && 
-					                      !el.hasAttribute('disabled') &&
-					                      style.pointerEvents !== 'none';
-					const inViewport = rect.top >= 0 && rect.top <= window.innerHeight;
+					const isClickable = !el.disabled && 
+					                   !el.hasAttribute('disabled') &&
+					                   style.pointerEvents !== 'none';
 					
 					return {
 						exists: true,
 						visible: isVisible,
-						interactable: isInteractable,
-						inViewport: inViewport,
-						rect: {top: rect.top, left: rect.left, width: rect.width, height: rect.height},
-						styles: {
-							display: style.display,
-							visibility: style.visibility,
-							opacity: style.opacity,
-							pointerEvents: style.pointerEvents
-						}
+						clickable: isClickable,
+						width: rect.width,
+						height: rect.height,
+						display: style.display,
+						visibility: style.visibility
 					};
 				})();
 			`, selector), &elementState),
 		)
 		
 		if err != nil {
-			log.Printf("⚠️ Element state check failed, attempt %d/40: %v", i+1, err)
-		} else if state, ok := elementState["exists"].(bool); ok && state {
+			log.Printf("⚠️ 元素状态检查失败: %v", err)
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+		
+		if state, ok := elementState["exists"].(bool); ok && state {
 			visible, _ := elementState["visible"].(bool)
-			interactable, _ := elementState["interactable"].(bool)
-			inViewport, _ := elementState["inViewport"].(bool)
+			clickable, _ := elementState["clickable"].(bool)
 			
-			if i%5 == 0 { // Log detailed status every 5 attempts
-				log.Printf("📊 Element state (attempt %d/40): visible=%t, interactable=%t, inViewport=%t", 
-					i+1, visible, interactable, inViewport)
-			}
+			log.Printf("📊 元素状态: visible=%t, clickable=%t", visible, clickable)
 			
-			if visible && interactable {
-				if !inViewport {
-					// Try to scroll element into view
-					log.Printf("📜 Element not in viewport, scrolling into view...")
-					chromedp.Run(ctxLong, chromedp.Evaluate(fmt.Sprintf(`
-						document.querySelector('%s').scrollIntoView({behavior: 'smooth', block: 'center'});
-					`, selector), nil))
-					time.Sleep(1 * time.Second) // Wait for scroll to complete
-				} else {
-					log.Printf("✅ Element ready for interaction after %d attempts: %s", i+1, selector)
-					return nil
-				}
+			if visible && clickable {
+				elapsed := time.Since(startTime)
+				log.Printf("✅ 元素准备就绪，耗时: %v", elapsed)
+				return nil
 			}
 		}
 		
 		time.Sleep(500 * time.Millisecond)
 	}
 	
-	// Final diagnostic before giving up
-	log.Printf("🚨 Final element diagnostic for: %s", selector)
-	var finalState map[string]interface{}
-	chromedp.Run(ctxLong, chromedp.Evaluate(fmt.Sprintf(`
-		(function() {
-			const el = document.querySelector('%s');
-			if (!el) return {error: 'Element not found'};
+	// Final attempt - element exists but not ready
+	log.Printf("❌ 元素等待失败: %s (总耗时: %v)", selector, time.Since(startTime))
+	return fmt.Errorf("element %s not ready after smart wait", selector)
+}
+
+// performSmartWait implements intelligent waiting with early execution and retry
+func (te *TestExecutor) performSmartWait(ctx context.Context, step models.TestStep, maxWaitTime time.Duration, stepIndex, totalSteps int, result *ExecutionResult) (bool, error) {
+	waitStartTime := time.Now()
+	checkInterval := 1 * time.Second // Check every 1 second
+	ticker := time.NewTicker(checkInterval)
+	defer ticker.Stop()
+	
+	maxWaitTimer := time.NewTimer(maxWaitTime)
+	defer maxWaitTimer.Stop()
+	
+	progressTicker := time.NewTicker(3 * time.Second) // Progress updates every 3 seconds
+	defer progressTicker.Stop()
+	
+	log.Printf("🎯 开始智能等待: 最多 %.0f 秒，每 %.0f 秒检测一次", maxWaitTime.Seconds(), checkInterval.Seconds())
+	
+	attemptCount := 0
+	var firstAttemptErr error
+	
+	for {
+		select {
+		case <-maxWaitTimer.C:
+			// Max time reached - perform final retry attempt
+			elapsed := time.Since(waitStartTime)
+			log.Printf("⏰ 智能等待达到最大时间 %.0f 秒，进行最终重试尝试", elapsed.Seconds())
 			
-			const rect = el.getBoundingClientRect();
-			const style = window.getComputedStyle(el);
-			return {
-				tagName: el.tagName,
-				className: el.className,
-				id: el.id,
-				rect: {top: rect.top, left: rect.left, width: rect.width, height: rect.height},
-				visible: rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none',
-				disabled: el.disabled || el.hasAttribute('disabled'),
-				styles: {
-					display: style.display,
-					visibility: style.visibility,
-					opacity: style.opacity,
-					pointerEvents: style.pointerEvents
+			finalErr := te.tryExecuteStep(ctx, step, stepIndex, totalSteps, result)
+			if finalErr == nil {
+				log.Printf("✅ 最终重试成功！步骤在最大等待时间后执行成功")
+				return true, nil
+			}
+			
+			log.Printf("❌ 最终重试也失败: %v", finalErr)
+			if firstAttemptErr != nil {
+				log.Printf("📋 首次尝试错误: %v", firstAttemptErr)
+			}
+			
+			// Return false to allow normal execution flow to continue
+			return false, nil
+			
+		case <-ticker.C:
+			elapsed := time.Since(waitStartTime).Seconds()
+			remaining := int(maxWaitTime.Seconds() - elapsed)
+			
+			if remaining <= 0 {
+				continue // Let the timer handle it
+			}
+			
+			// Check if element is ready and try to execute
+			if te.isElementReady(ctx, step.Selector) {
+				attemptCount++
+				log.Printf("🎯 检测到元素可用 (第 %d 次检测，已等待 %.0f 秒)，尝试立即执行", attemptCount, elapsed)
+				
+				err := te.tryExecuteStep(ctx, step, stepIndex, totalSteps, result)
+				if err == nil {
+					executionTime := time.Since(waitStartTime)
+					log.Printf("✅ 智能等待提前执行成功！耗时: %v (节省: %v)", executionTime, maxWaitTime-executionTime)
+					return true, nil
 				}
-			};
-		})();
-	`, selector), &finalState))
-	
-	if finalState != nil {
-		log.Printf("🔍 Final element state: %+v", finalState)
+				
+				// Store first attempt error for reference
+				if firstAttemptErr == nil {
+					firstAttemptErr = err
+				}
+				
+				log.Printf("⚠️ 第 %d 次尝试执行失败: %v，继续等待...", attemptCount, err)
+			}
+			
+		case <-progressTicker.C:
+			elapsed := time.Since(waitStartTime).Seconds()
+			remaining := int(maxWaitTime.Seconds() - elapsed)
+			if remaining > 0 {
+				log.Printf("🔄 智能等待进度: 已等待 %.0f 秒，还需等待最多 %d 秒 (已尝试 %d 次)", elapsed, remaining, attemptCount)
+				result.addStepLog("info", fmt.Sprintf("智能等待进度: %.0f/%d 秒 (已尝试 %d 次)", elapsed, int(maxWaitTime.Seconds()), attemptCount), stepIndex-1,
+					"smart_wait", "running", step.Selector, fmt.Sprintf("%d", remaining), "", 0, "")
+			}
+			
+		case <-ctx.Done():
+			elapsed := time.Since(waitStartTime)
+			log.Printf("❌ 智能等待被取消，已等待 %v", elapsed)
+			return false, ctx.Err()
+		}
 	}
+}
+
+// performFixedWait implements traditional fixed-duration waiting
+func (te *TestExecutor) performFixedWait(ctx context.Context, waitDuration time.Duration, stepIndex, totalSteps int, result *ExecutionResult) error {
+	waitStartTime := time.Now()
 	
-	return fmt.Errorf("element %s not ready for interaction after enhanced wait (25s)", selector)
+	// Create wait timer for exact duration
+	waitTimer := time.NewTimer(waitDuration)
+	defer waitTimer.Stop()
+	
+	// Progress ticker every 3 seconds  
+	progressTicker := time.NewTicker(3 * time.Second)
+	defer progressTicker.Stop()
+	
+	log.Printf("⏰ 开始固定等待: 必须等待 %.0f 秒", waitDuration.Seconds())
+	
+	for {
+		select {
+		case <-waitTimer.C:
+			// Fixed wait duration completed
+			elapsed := time.Since(waitStartTime)
+			log.Printf("✅ 固定等待完成！精确等待了 %v", elapsed)
+			return nil
+			
+		case <-progressTicker.C:
+			elapsed := time.Since(waitStartTime).Seconds()
+			remaining := int(waitDuration.Seconds() - elapsed)
+			if remaining > 0 {
+				log.Printf("⏰ 固定等待进度: 已等待 %.0f 秒，还需等待 %d 秒", elapsed, remaining)
+				result.addStepLog("info", fmt.Sprintf("固定等待进度: %.0f/%d 秒", elapsed, int(waitDuration.Seconds())), stepIndex-1,
+					"fixed_wait", "running", "", fmt.Sprintf("%d", remaining), "", 0, "")
+			}
+			
+		case <-ctx.Done():
+			elapsed := time.Since(waitStartTime)
+			log.Printf("❌ 固定等待被取消，已等待 %v", elapsed)
+			return ctx.Err()
+		}
+	}
+}
+
+// isElementReady checks if element is ready for interaction
+func (te *TestExecutor) isElementReady(ctx context.Context, selector string) bool {
+	// Quick timeout for readiness check
+	checkCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	
+	// Try standard ChromeDP readiness check
+	err := chromedp.Run(checkCtx,
+		chromedp.WaitVisible(selector, chromedp.ByQuery),
+		chromedp.WaitEnabled(selector, chromedp.ByQuery),
+	)
+	
+	return err == nil
+}
+
+// tryExecuteStep attempts to execute a single step
+func (te *TestExecutor) tryExecuteStep(ctx context.Context, step models.TestStep, stepIndex, totalSteps int, result *ExecutionResult) error {
+	log.Printf("🔧 尝试执行步骤: %s", step.Type)
+	
+	// Create execution context with shorter timeout for attempts during wait
+	stepCtx, stepCancel := context.WithTimeout(ctx, 8*time.Second)
+	defer stepCancel()
+	
+	switch step.Type {
+	case "click":
+		return te.executeClick(stepCtx, step)
+	case "input":
+		return te.executeInput(stepCtx, step)
+	case "keydown":
+		return te.executeKeydown(stepCtx, step)
+	case "scroll":
+		return te.executeScroll(stepCtx, step)
+	case "swipe":
+		return te.executeSwipe(stepCtx, step)
+	case "touchstart", "touchend", "touchmove":
+		return te.executeTouch(stepCtx, step)
+	case "mousedrag":
+		return te.executeMouseDrag(stepCtx, step)
+	case "change":
+		return te.executeChange(stepCtx, step)
+	case "submit":
+		return te.executeSubmit(stepCtx, step)
+	default:
+		return fmt.Errorf("unsupported step type: %s", step.Type)
+	}
 }
 
 // waitForElementStabilization waits for element to stop changing (position, size, style)
@@ -1429,11 +1602,88 @@ func (te *TestExecutor) executeClickByText(ctx context.Context, selector string,
 }
 
 func (te *TestExecutor) executeInput(ctx context.Context, step models.TestStep) error {
-	return chromedp.Run(ctx,
+	log.Printf("🔤 开始输入操作: 选择器=%s, 值=%s", step.Selector, step.Value)
+	
+	// Strategy 1: Try standard ChromeDP input
+	err := chromedp.Run(ctx,
 		chromedp.Clear(step.Selector),
 		chromedp.SendKeys(step.Selector, step.Value),
 		chromedp.Sleep(200*time.Millisecond),
 	)
+	
+	if err == nil {
+		log.Printf("✅ 标准输入成功")
+		return nil
+	}
+	
+	log.Printf("⚠️ 标准输入失败: %v, 尝试增强策略", err)
+	
+	// Strategy 2: Enhanced input for problematic elements (like textarea)
+	err = chromedp.Run(ctx,
+		// First focus the element
+		chromedp.Focus(step.Selector),
+		chromedp.Sleep(100*time.Millisecond),
+		
+		// Clear using JavaScript
+		chromedp.Evaluate(fmt.Sprintf(`
+			(function() {
+				const el = document.querySelector('%s');
+				if (el) {
+					el.value = '';
+					el.focus();
+					return true;
+				}
+				return false;
+			})();
+		`, step.Selector), nil),
+		chromedp.Sleep(100*time.Millisecond),
+		
+		// Try SendKeys again
+		chromedp.SendKeys(step.Selector, step.Value),
+		chromedp.Sleep(200*time.Millisecond),
+	)
+	
+	if err == nil {
+		log.Printf("✅ 增强输入策略成功")
+		return nil
+	}
+	
+	log.Printf("⚠️ 增强输入失败: %v, 尝试JavaScript输入", err)
+	
+	// Strategy 3: Pure JavaScript input as fallback
+	var success bool
+	err = chromedp.Run(ctx,
+		chromedp.Evaluate(fmt.Sprintf(`
+			(function() {
+				const el = document.querySelector('%s');
+				if (el) {
+					el.focus();
+					el.value = '%s';
+					
+					// Trigger input events to ensure proper handling
+					el.dispatchEvent(new Event('input', { bubbles: true }));
+					el.dispatchEvent(new Event('change', { bubbles: true }));
+					
+					return true;
+				}
+				return false;
+			})();
+		`, step.Selector, step.Value), &success),
+		chromedp.Sleep(200*time.Millisecond),
+	)
+	
+	if err != nil {
+		log.Printf("❌ JavaScript输入失败: %v", err)
+		return err
+	}
+	
+	if !success {
+		log.Printf("❌ JavaScript输入失败: 元素未找到")
+		return fmt.Errorf("element not found for JavaScript input: %s", step.Selector)
+	}
+	
+	log.Printf("✅ JavaScript输入策略成功")
+	return nil
 }
 
 func (te *TestExecutor) executeKeydown(ctx context.Context, step models.TestStep) error {

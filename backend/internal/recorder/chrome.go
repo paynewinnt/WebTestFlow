@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os/exec"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -557,32 +558,35 @@ func (r *ChromeRecorder) enhancedCrossDomainReinject() {
 		// Step 4: Force clear any existing recorder state
 		err = chromedp.Run(r.ctx,
 			chromedp.Evaluate(`
-				try {
-					// Remove any existing recorder instances
-					if (window.autoUIRecorder) {
-						console.log('🧹 Clearing existing cross-domain recorder state');
-						delete window.autoUIRecorder;
-					}
-					if (window.getChromeDPCode) {
-						delete window.getChromeDPCode;
-					}
-					
-					// Clear any conflicting event listeners
-					if (window.__uiRecorderListeners) {
-						console.log('🧹 Removing existing event listeners');
-						for (const listener of window.__uiRecorderListeners) {
-							try {
-								document.removeEventListener(listener.type, listener.handler, true);
-							} catch (e) {}
+				(function() {
+					try {
+						// Remove any existing recorder instances
+						if (window.autoUIRecorder) {
+							console.log('🧹 Clearing existing cross-domain recorder state');
+							delete window.autoUIRecorder;
 						}
-						delete window.__uiRecorderListeners;
+						if (window.getChromeDPCode) {
+							delete window.getChromeDPCode;
+						}
+						
+						// Clear any conflicting event listeners
+						if (window.__uiRecorderListeners) {
+							console.log('🧹 Removing existing event listeners');
+							for (const listener of window.__uiRecorderListeners) {
+								try {
+									document.removeEventListener(listener.type, listener.handler, true);
+								} catch (e) {}
+							}
+							delete window.__uiRecorderListeners;
+						}
+						
+						console.log('🧹 Cross-domain cleanup completed');
+						return true;
+					} catch (e) {
+						console.warn('Cross-domain cleanup error:', e);
+						return false;
 					}
-					
-					console.log('🧹 Cross-domain cleanup completed');
-				} catch (e) {
-					console.warn('Cross-domain cleanup error:', e);
-				}
-				return true;
+				})();
 			`, nil))
 
 		if err != nil {
@@ -661,16 +665,93 @@ func (r *ChromeRecorder) enhancedCrossDomainReinject() {
 	log.Printf("❌ All cross-domain reinject attempts failed")
 }
 
+// shouldSkipCDPEvent determines if a CDP event should be skipped due to potentially problematic content
+func (r *ChromeRecorder) shouldSkipCDPEvent(ev interface{}) bool {
+	// Convert event to string for inspection
+	eventStr := fmt.Sprintf("%+v", ev)
+	
+	// Check for problematic patterns that cause JSON unmarshaling errors
+	problematicPatterns := []string{
+		"cookiePart",
+		"NavigationReason", 
+		"ClientNavigationReason",
+		"initialFrameNavigation",
+		"frameNavigation",
+		"clientNavigation",
+	}
+	
+	for _, pattern := range problematicPatterns {
+		if strings.Contains(eventStr, pattern) {
+			return true // Skip this event
+		}
+	}
+	
+	return false // Event is safe to process
+}
+
+// sanitizeURL removes potentially problematic content from URLs
+func (r *ChromeRecorder) sanitizeURL(url string) string {
+	if url == "" {
+		return ""
+	}
+	
+	// Remove problematic patterns that might cause JSON errors
+	cleaned := url
+	problematicPatterns := []string{
+		"cookiePart",
+		"NavigationReason",
+		"ClientNavigationReason",
+	}
+	
+	for _, pattern := range problematicPatterns {
+		// Remove pattern and any following non-whitespace characters
+		re := regexp.MustCompile(pattern + `[^\s]*`)
+		cleaned = re.ReplaceAllString(cleaned, "")
+	}
+	
+	// Limit URL length to prevent massive strings
+	if len(cleaned) > 500 {
+		cleaned = cleaned[:500] + "..."
+	}
+	
+	return cleaned
+}
+
+// isMessageSafe checks if a console message is safe to log
+func (r *ChromeRecorder) isMessageSafe(message string) bool {
+	// Check for problematic patterns
+	problematicPatterns := []string{
+		"cookiePart",
+		"NavigationReason",
+		"ClientNavigationReason",
+	}
+	
+	for _, pattern := range problematicPatterns {
+		if strings.Contains(message, pattern) {
+			return false
+		}
+	}
+	
+	return true
+}
+
 // setupNavigationListeners sets up Chrome DevTools Protocol listeners for page navigation events
 func (r *ChromeRecorder) setupNavigationListeners() {
 	log.Printf("🔧 Setting up Chrome DevTools Protocol navigation listeners")
 
-	// Enable page domain events
+	// Enable page domain events with enhanced filtering
 	chromedp.ListenTarget(r.ctx, func(ev interface{}) {
+		// Pre-filter: Skip events that might contain problematic data
+		if r.shouldSkipCDPEvent(ev) {
+			return
+		}
+		
 		switch ev := ev.(type) {
 		case *page.EventFrameNavigated:
-			if ev.Frame.URL != "" {
-				log.Printf("🌐 CDP: Frame navigated to %s", ev.Frame.URL)
+			if ev.Frame != nil && ev.Frame.URL != "" {
+				// Safely extract URL without triggering JSON errors
+				frameURL := r.sanitizeURL(ev.Frame.URL)
+				log.Printf("🌐 CDP: Frame navigated to %s", frameURL)
 				// Trigger immediate script re-injection for frame navigation
 				go func() {
 					time.Sleep(1 * time.Second) // Wait for navigation to complete
@@ -679,7 +760,9 @@ func (r *ChromeRecorder) setupNavigationListeners() {
 			}
 
 		case *page.EventNavigatedWithinDocument:
-			log.Printf("🔄 CDP: Navigation within document to %s", ev.URL)
+			// Safely extract URL
+			navURL := r.sanitizeURL(ev.URL)
+			log.Printf("🔄 CDP: Navigation within document to %s", navURL)
 			// For SPA navigation, also try re-injection
 			go func() {
 				time.Sleep(500 * time.Millisecond)
@@ -1008,23 +1091,70 @@ func getRecordingScript() string {
 			return false;
 		},
 
-		// Check if event is duplicate within recent timeframe
+		// Enhanced duplicate event detection with intelligent timeouts
 		isDuplicateEvent: function(event) {
 			const now = Date.now();
 			const eventKey = event.type + '|' + (event.selector || '') + '|' + (event.value || '');
 			const lastTime = this.recentEvents.get(eventKey);
 			
-			// Consider it duplicate if same event happened within 100ms
-			if (lastTime && (now - lastTime) < 100) {
+			// Different duplicate detection windows for different event types
+			let duplicateWindow = 100; // Default 100ms
+			
+			switch(event.type) {
+				case 'click':
+					duplicateWindow = 800; // 800ms for clicks (handles rapid clicking)
+					break;
+				case 'navigate':
+					duplicateWindow = 2000; // 2s for navigation (handles page loading delays)
+					break;
+				case 'input':
+					duplicateWindow = 300; // 300ms for input (handles fast typing)
+					break;
+				case 'scroll':
+				case 'swipe':
+					duplicateWindow = 150; // 150ms for scroll/swipe
+					break;
+				case 'touchstart':
+				case 'touchend':
+					duplicateWindow = 500; // 500ms for touch events
+					break;
+				case 'keydown':
+					duplicateWindow = 200; // 200ms for key events
+					break;
+				default:
+					duplicateWindow = 300; // 300ms for other events
+			}
+			
+			// Check for exact duplicates within the time window
+			if (lastTime && (now - lastTime) < duplicateWindow) {
+				console.log('🚫 Duplicate ' + event.type + ' event detected within ' + (now - lastTime) + 'ms (threshold: ' + duplicateWindow + 'ms)');
 				return true;
+			}
+			
+			// Additional check: prevent more than 3 identical events within 5 seconds
+			const recentSimilarKey = eventKey + '_count';
+			const recentCount = this.recentEvents.get(recentSimilarKey) || 0;
+			const firstEventKey = eventKey + '_first';
+			const firstEventTime = this.recentEvents.get(firstEventKey) || now;
+			
+			if (now - firstEventTime < 5000) { // Within 5 seconds
+				if (recentCount >= 3) {
+					console.log('🚫 Too many similar ' + event.type + ' events (' + recentCount + ') within 5 seconds');
+					return true;
+				}
+				this.recentEvents.set(recentSimilarKey, recentCount + 1);
+			} else {
+				// Reset counter after 5 seconds
+				this.recentEvents.set(recentSimilarKey, 1);
+				this.recentEvents.set(firstEventKey, now);
 			}
 			
 			// Update the timestamp for this event type
 			this.recentEvents.set(eventKey, now);
 			
-			// Clean up old entries (keep only last 1 minute)
+			// Clean up old entries (keep only last 2 minutes)
 			for (const [key, time] of this.recentEvents.entries()) {
-				if (now - time > 60000) {
+				if (typeof time === 'number' && now - time > 120000) {
 					this.recentEvents.delete(key);
 				}
 			}
@@ -1067,6 +1197,12 @@ func getRecordingScript() string {
 						try {
 							JSON.stringify(event);
 						} catch (e) {
+							return;
+						}
+						
+						// CRITICAL: Check for duplicate events before adding
+						if (this.isDuplicateEvent(event)) {
+							console.log('🚫 Duplicate event filtered:', event.type, event.selector);
 							return;
 						}
 						

@@ -23,8 +23,10 @@ func GetTestCases(c *gin.Context) {
 	if page <= 0 {
 		page = 1
 	}
-	if pageSize <= 0 || pageSize > 100 {
+	if pageSize <= 0 {
 		pageSize = 10
+	} else if pageSize > 1000 {
+		pageSize = 1000  // Allow up to 1000 test cases for transfer component
 	}
 
 	var testCases []models.TestCase

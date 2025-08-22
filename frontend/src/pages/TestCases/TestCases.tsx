@@ -23,6 +23,7 @@ import {
   Tooltip,
   Dropdown,
   Switch,
+  Radio,
 } from 'antd';
 import dayjs from 'dayjs';
 import {
@@ -37,6 +38,7 @@ import {
   MoreOutlined,
   StopOutlined,
   SecurityScanOutlined,
+  ThunderboltOutlined,
 } from '@ant-design/icons';
 import { api } from '../../services/api';
 import type { TestCase, Project, Environment, Device, TestStep } from '../../types';
@@ -270,6 +272,32 @@ const StepsEditor: React.FC<StepsEditorProps> = ({ visible, testCase, onClose, o
                         style={{ width: '100%' }}
                         addonAfter="秒"
                       />
+                      {step.wait_before > 0 && (
+                        <div style={{ marginTop: 8 }}>
+                          <label style={{ fontWeight: 'bold', marginBottom: 4, display: 'block' }}>
+                            <ThunderboltOutlined style={{ marginRight: 4 }} />
+                            等待策略
+                          </label>
+                          <Radio.Group
+                            value={step.wait_type || 'smart'}
+                            onChange={(e) => handleStepUpdate(index, 'wait_type', e.target.value)}
+                            style={{ width: '100%' }}
+                          >
+                            <Radio value="smart">
+                              <span style={{ color: '#1890ff' }}>🎯 智能等待</span>
+                            </Radio>
+                            <Radio value="fixed">
+                              <span style={{ color: '#fa8c16' }}>⏰ 固定等待</span>
+                            </Radio>
+                          </Radio.Group>
+                          <Text type="secondary" style={{ fontSize: '12px', marginTop: 4, display: 'block' }}>
+                            {step.wait_type === 'fixed' 
+                              ? '固定等待：必须等到最大时间才执行，适用于需要严格时间控制的场景'
+                              : '智能等待：检测到元素可用就立即执行，最大时间时重试，提高执行效率'
+                            }
+                          </Text>
+                        </div>
+                      )}
                       <Text type="secondary" style={{ fontSize: '12px' }}>
                         设置大于0的值时，此步骤执行前会等待指定时间
                       </Text>
