@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"sync"
 	"time"
 	"webtestflow/backend/internal/executor"
 	"webtestflow/backend/internal/models"
@@ -55,7 +56,43 @@ func GetTestSuites(c *gin.Context) {
 		testSuites[i].EnvironmentInfo = testSuites[i].GetEnvironmentInfo()
 	}
 
-	response.Page(c, testSuites, total, page, pageSize)
+	// Calculate global statistics (not filtered by pagination)
+	var statistics struct {
+		Total           int64 `json:"total"`
+		Enabled         int64 `json:"enabled"`
+		Scheduled       int64 `json:"scheduled"`
+		Parallel        int64 `json:"parallel"`
+	}
+
+	statQuery := database.DB.Model(&models.TestSuite{})
+	if projectID != "" {
+		statQuery = statQuery.Where("project_id = ?", projectID)
+	}
+
+	// Count enabled test suites
+	statQuery.Where("status = ?", 1).Count(&statistics.Enabled)
+	statistics.Total = statistics.Enabled
+
+	// Count scheduled test suites (have cron_expression)
+	statQuery.Where("status = ? AND cron_expression != ''", 1).Count(&statistics.Scheduled)
+
+	// Count parallel execution test suites
+	statQuery.Where("status = ? AND is_parallel = ?", 1, true).Count(&statistics.Parallel)
+
+	// Create response with both data and statistics
+	responseData := gin.H{
+		"list": testSuites,
+		"total": total,
+		"page": page,
+		"page_size": pageSize,
+		"statistics": statistics,
+	}
+
+	c.JSON(200, gin.H{
+		"code": 200,
+		"data": responseData,
+		"message": "success",
+	})
 }
 
 func CreateTestSuite(c *gin.Context) {
@@ -539,94 +576,203 @@ func ExecuteTestSuite(c *gin.Context) {
 			}
 		}()
 
-		for i, execution := range executions {
-			execution.Status = "running"
-			database.DB.Save(&execution)
+		if testSuite.IsParallel {
+			// 并行执行模式
+			log.Printf("Starting PARALLEL execution of %d test cases for suite %d", len(executions), testSuite.ID)
+			
+			var wg sync.WaitGroup
+			var mu sync.Mutex  // 用于保护共享变量
+			
+			// 启动所有测试用例的并行执行
+			for i, execution := range executions {
+				wg.Add(1)
+				go func(exec models.TestExecution, index int) {
+					defer wg.Done()
+					defer func() {
+						if r := recover(); r != nil {
+							log.Printf("🚨 PANIC recovered in parallel test case execution %d: %v", exec.ID, r)
+							mu.Lock()
+							failedCount++
+							completedExecutions[exec.ID] = true
+							mu.Unlock()
+							
+							// Save failed execution to database
+							exec.Status = "failed"
+							exec.ErrorMessage = fmt.Sprintf("Test case execution panic: %v", r)
+							now := time.Now()
+							exec.EndTime = &now
+							exec.Duration = int(now.Sub(exec.StartTime).Milliseconds())
+							database.DB.Save(&exec)
+						}
+					}()
 
-			// Load test case with relations
-			var testCase models.TestCase
-			database.DB.Preload("Environment").Preload("Device").
-				First(&testCase, *execution.TestCaseID)
+					exec.Status = "running"
+					database.DB.Save(&exec)
 
-			// Add isolation delay between test cases to prevent interference
-			if i > 0 {
-				log.Printf("Adding isolation delay before executing test case %d/%d", i+1, len(executions))
-				time.Sleep(2 * time.Second) // Give previous execution time to fully complete
-			}
+					// Load test case with relations
+					var testCase models.TestCase
+					database.DB.Preload("Environment").Preload("Device").
+						First(&testCase, *exec.TestCaseID)
 
-			log.Printf("Starting execution of test case %d/%d: %s", i+1, len(executions), testCase.Name)
+					// Add small random delay to prevent Chrome port conflicts
+					if index > 0 {
+						time.Sleep(time.Duration(index) * 500 * time.Millisecond)
+					}
 
-			// Execute with panic recovery for each individual test case
-			var result executor.ExecutionResult
-			func() {
-				defer func() {
-					if r := recover(); r != nil {
-						log.Printf("🚨 PANIC recovered in individual test case execution %d: %v", execution.ID, r)
-						result = executor.ExecutionResult{
-							Success:      false,
-							ErrorMessage: fmt.Sprintf("Test case execution panic: %v", r),
-							Screenshots:  []string{},
-							Logs: []executor.ExecutionLog{
-								{
-									Timestamp: time.Now(),
-									Level:     "error",
-									Message:   fmt.Sprintf("Test case panic recovered: %v", r),
-									StepIndex: -1,
-								},
-							},
-							Metrics: nil,
+					log.Printf("Starting PARALLEL execution of test case %d: %s", index+1, testCase.Name)
+
+					// Execute test case
+					result := executor.GlobalExecutor.ExecuteTestCaseDirectly(&exec, &testCase)
+
+					log.Printf("Completed PARALLEL execution of test case %d: %s (Success: %v)", index+1, testCase.Name, result.Success)
+
+					// Update execution with result (thread-safe)
+					mu.Lock()
+					if result.Success {
+						exec.Status = "passed"
+						passedCount++
+					} else {
+						exec.Status = "failed"
+						failedCount++
+						exec.ErrorMessage = result.ErrorMessage
+					}
+
+					now := time.Now()
+					exec.EndTime = &now
+					exec.Duration = int(now.Sub(exec.StartTime).Milliseconds())
+
+					// Save logs and screenshots
+					if logsJSON, err := json.Marshal(result.Logs); err == nil {
+						exec.ExecutionLogs = string(logsJSON)
+						// Convert logs to interface{} for aggregation
+						for _, logItem := range result.Logs {
+							allLogs = append(allLogs, logItem)
 						}
 					}
+					if screenshotsJSON, err := json.Marshal(result.Screenshots); err == nil {
+						exec.Screenshots = string(screenshotsJSON)
+						allScreenshots = append(allScreenshots, result.Screenshots...)
+					}
+
+					database.DB.Save(&exec)
+
+					// Notify executor that database update is complete
+					if executor.GlobalExecutor != nil {
+						executor.GlobalExecutor.NotifyExecutionComplete(exec.ID)
+					}
+
+					// Save performance metrics if available
+					if result.Metrics != nil {
+						result.Metrics.ExecutionID = exec.ID
+						database.DB.Create(result.Metrics)
+					}
+
+					completedExecutions[exec.ID] = true
+					mu.Unlock()
+
+					log.Printf("PARALLEL test case execution %d completed with status: %s", exec.ID, exec.Status)
+				}(execution, i)
+			}
+
+			// 等待所有并行执行完成
+			wg.Wait()
+			log.Printf("All PARALLEL test case executions completed for suite %d", testSuite.ID)
+
+		} else {
+			// 串行执行模式（原有逻辑）
+			log.Printf("Starting SERIAL execution of %d test cases for suite %d", len(executions), testSuite.ID)
+			
+			for i, execution := range executions {
+				execution.Status = "running"
+				database.DB.Save(&execution)
+
+				// Load test case with relations
+				var testCase models.TestCase
+				database.DB.Preload("Environment").Preload("Device").
+					First(&testCase, *execution.TestCaseID)
+
+				// Add isolation delay between test cases to prevent interference
+				if i > 0 {
+					log.Printf("Adding isolation delay before executing test case %d/%d", i+1, len(executions))
+					time.Sleep(2 * time.Second) // Give previous execution time to fully complete
+				}
+
+				log.Printf("Starting SERIAL execution of test case %d/%d: %s", i+1, len(executions), testCase.Name)
+
+				// Execute with panic recovery for each individual test case
+				var result executor.ExecutionResult
+				func() {
+					defer func() {
+						if r := recover(); r != nil {
+							log.Printf("🚨 PANIC recovered in individual test case execution %d: %v", execution.ID, r)
+							result = executor.ExecutionResult{
+								Success:      false,
+								ErrorMessage: fmt.Sprintf("Test case execution panic: %v", r),
+								Screenshots:  []string{},
+								Logs: []executor.ExecutionLog{
+									{
+										Timestamp: time.Now(),
+										Level:     "error",
+										Message:   fmt.Sprintf("Test case panic recovered: %v", r),
+										StepIndex: -1,
+									},
+								},
+								Metrics: nil,
+							}
+						}
+					}()
+
+					// Use direct execution to avoid ChromeDP concurrency issues
+					result = executor.GlobalExecutor.ExecuteTestCaseDirectly(&execution, &testCase)
 				}()
 
-				// Use direct execution to avoid ChromeDP concurrency issues
-				result = executor.GlobalExecutor.ExecuteTestCaseDirectly(&execution, &testCase)
-			}()
-
-			// Update execution with result
-			if result.Success {
-				execution.Status = "passed"
-				passedCount++
-			} else {
-				execution.Status = "failed"
-				failedCount++
-				execution.ErrorMessage = result.ErrorMessage
-			}
-
-			now := time.Now()
-			execution.EndTime = &now
-			execution.Duration = int(now.Sub(execution.StartTime).Milliseconds())
-
-			// Save logs and screenshots
-			if logsJSON, err := json.Marshal(result.Logs); err == nil {
-				execution.ExecutionLogs = string(logsJSON)
-				// Convert logs to interface{} for aggregation
-				for _, log := range result.Logs {
-					allLogs = append(allLogs, log)
+				// Update execution with result
+				if result.Success {
+					execution.Status = "passed"
+					passedCount++
+				} else {
+					execution.Status = "failed"
+					failedCount++
+					execution.ErrorMessage = result.ErrorMessage
 				}
-			}
-			if screenshotsJSON, err := json.Marshal(result.Screenshots); err == nil {
-				execution.Screenshots = string(screenshotsJSON)
-				allScreenshots = append(allScreenshots, result.Screenshots...)
-			}
 
-			database.DB.Save(&execution)
-			log.Printf("Test case execution %d completed with status: %s", execution.ID, execution.Status)
+				now := time.Now()
+				execution.EndTime = &now
+				execution.Duration = int(now.Sub(execution.StartTime).Milliseconds())
 
-			// Notify executor that database update is complete
-			if executor.GlobalExecutor != nil {
-				executor.GlobalExecutor.NotifyExecutionComplete(execution.ID)
+				// Save logs and screenshots
+				if logsJSON, err := json.Marshal(result.Logs); err == nil {
+					execution.ExecutionLogs = string(logsJSON)
+					// Convert logs to interface{} for aggregation
+					for _, logItem := range result.Logs {
+						allLogs = append(allLogs, logItem)
+					}
+				}
+				if screenshotsJSON, err := json.Marshal(result.Screenshots); err == nil {
+					execution.Screenshots = string(screenshotsJSON)
+					allScreenshots = append(allScreenshots, result.Screenshots...)
+				}
+
+				database.DB.Save(&execution)
+				log.Printf("SERIAL test case execution %d completed with status: %s", execution.ID, execution.Status)
+
+				// Notify executor that database update is complete
+				if executor.GlobalExecutor != nil {
+					executor.GlobalExecutor.NotifyExecutionComplete(execution.ID)
+				}
+
+				// Save performance metrics if available
+				if result.Metrics != nil {
+					result.Metrics.ExecutionID = execution.ID
+					database.DB.Create(result.Metrics)
+				}
+
+				executions[i] = execution
+				// Mark this execution as completed
+				completedExecutions[execution.ID] = true
+
+				log.Printf("Completed SERIAL test case %d/%d: %s", i+1, len(executions), testCase.Name)
 			}
-
-			// Save performance metrics if available
-			if result.Metrics != nil {
-				result.Metrics.ExecutionID = execution.ID
-				database.DB.Create(result.Metrics)
-			}
-
-			executions[i] = execution
-			// Mark this execution as completed
-			completedExecutions[execution.ID] = true
 		}
 	}()
 

@@ -33,7 +33,7 @@ import {
   ReloadOutlined,
 } from '@ant-design/icons';
 import { api } from '../../services/api';
-import type { TestSuite, Project, Environment, TestCase } from '../../types';
+import type { TestSuite, Project, Environment, TestCase, TestSuiteStatistics } from '../../types';
 import type { ColumnsType } from 'antd/es/table';
 
 const { Title, Text } = Typography;
@@ -61,6 +61,12 @@ const TestSuites: React.FC = () => {
     current: 1,
     pageSize: 10,
     total: 0,
+  });
+  const [statistics, setStatistics] = useState<TestSuiteStatistics>({
+    total: 0,
+    enabled: 0,
+    scheduled: 0,
+    parallel: 0,
   });
 
   useEffect(() => {
@@ -104,6 +110,11 @@ const TestSuites: React.FC = () => {
         ...prev,
         total: response.total,
       }));
+      
+      // Update statistics if available
+      if (response.statistics) {
+        setStatistics(response.statistics as TestSuiteStatistics);
+      }
     } catch (error) {
       console.error('Failed to load test suites:', error);
       message.error('获取测试套件失败');
@@ -393,14 +404,14 @@ const TestSuites: React.FC = () => {
       <Row gutter={16} style={{ marginBottom: 24 }}>
         <Col span={6}>
           <Card>
-            <Statistic title="总计" value={pagination.total} />
+            <Statistic title="总计" value={statistics.total} />
           </Card>
         </Col>
         <Col span={6}>
           <Card>
             <Statistic
               title="启用"
-              value={testSuites.filter(ts => ts.status === 1).length}
+              value={statistics.enabled}
               valueStyle={{ color: '#3f8600' }}
             />
           </Card>
@@ -409,7 +420,7 @@ const TestSuites: React.FC = () => {
           <Card>
             <Statistic
               title="定时任务"
-              value={testSuites.filter(ts => ts.cron_expression).length}
+              value={statistics.scheduled}
               valueStyle={{ color: '#1890ff' }}
             />
           </Card>
@@ -418,7 +429,7 @@ const TestSuites: React.FC = () => {
           <Card>
             <Statistic
               title="并行执行"
-              value={testSuites.filter(ts => ts.is_parallel).length}
+              value={statistics.parallel}
               valueStyle={{ color: '#fa8c16' }}
             />
           </Card>

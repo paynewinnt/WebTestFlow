@@ -41,7 +41,7 @@ import {
   ThunderboltOutlined,
 } from '@ant-design/icons';
 import { api } from '../../services/api';
-import type { TestCase, Project, Environment, Device, TestStep } from '../../types';
+import type { TestCase, Project, Environment, Device, TestStep, TestCaseStatistics } from '../../types';
 import type { ColumnsType } from 'antd/es/table';
 import CaptchaMarker from '../../components/CaptchaMarker/CaptchaMarker';
 
@@ -461,6 +461,12 @@ const TestCases: React.FC = () => {
     pageSize: 10,
     total: 0,
   });
+  const [statistics, setStatistics] = useState<TestCaseStatistics>({
+    total: 0,
+    enabled: 0,
+    disabled: 0,
+    high_priority: 0,
+  });
 
   useEffect(() => {
     loadTestCases();
@@ -494,6 +500,11 @@ const TestCases: React.FC = () => {
         ...prev,
         total: response.total,
       }));
+      
+      // Update statistics if available
+      if (response.statistics) {
+        setStatistics(response.statistics as TestCaseStatistics);
+      }
     } catch (error) {
       console.error('Failed to load test cases:', error);
       message.error('获取测试用例失败');
@@ -815,14 +826,14 @@ const TestCases: React.FC = () => {
       <Row gutter={16} style={{ marginBottom: 24 }}>
         <Col span={6}>
           <Card>
-            <Statistic title="总计" value={pagination.total} />
+            <Statistic title="总计" value={statistics.total} />
           </Card>
         </Col>
         <Col span={6}>
           <Card>
             <Statistic
               title="启用"
-              value={testCases.filter(tc => tc.status === 1).length}
+              value={statistics.enabled}
               valueStyle={{ color: '#3f8600' }}
             />
           </Card>
@@ -831,7 +842,7 @@ const TestCases: React.FC = () => {
           <Card>
             <Statistic
               title="禁用"
-              value={testCases.filter(tc => tc.status === 0).length}
+              value={statistics.disabled}
               valueStyle={{ color: '#cf1322' }}
             />
           </Card>
@@ -840,7 +851,7 @@ const TestCases: React.FC = () => {
           <Card>
             <Statistic
               title="高优先级"
-              value={testCases.filter(tc => tc.priority === 3).length}
+              value={statistics.high_priority}
               valueStyle={{ color: '#fa541c' }}
             />
           </Card>

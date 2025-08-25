@@ -54,7 +54,41 @@ func GetTestCases(c *gin.Context) {
 		testCases[i].User.Password = ""
 	}
 
-	response.Page(c, testCases, total, page, pageSize)
+	// Calculate global statistics (not filtered by pagination)
+	var statistics struct {
+		Total           int64 `json:"total"`
+		Enabled         int64 `json:"enabled"`
+		Disabled        int64 `json:"disabled"`
+		HighPriority    int64 `json:"high_priority"`
+	}
+
+	statQuery := database.DB.Model(&models.TestCase{})
+	if projectID != "" {
+		statQuery = statQuery.Where("project_id = ?", projectID)
+	}
+
+	// Count all statuses
+	statQuery.Where("status = ?", 1).Count(&statistics.Enabled)
+	statQuery.Where("status = ?", 0).Count(&statistics.Disabled)
+	statistics.Total = statistics.Enabled + statistics.Disabled
+
+	// Count high priority (status = 1 and priority = 3)
+	statQuery.Where("status = ? AND priority = ?", 1, 3).Count(&statistics.HighPriority)
+
+	// Create response with both data and statistics
+	responseData := gin.H{
+		"list": testCases,
+		"total": total,
+		"page": page,
+		"page_size": pageSize,
+		"statistics": statistics,
+	}
+
+	c.JSON(200, gin.H{
+		"code": 200,
+		"data": responseData,
+		"message": "success",
+	})
 }
 
 func CreateTestCase(c *gin.Context) {

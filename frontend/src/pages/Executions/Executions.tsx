@@ -242,11 +242,6 @@ const Executions: React.FC = () => {
           {type === 'test_case' ? '测试用例' : '测试套件'}
         </Tag>
       ),
-      filters: [
-        { text: '测试用例', value: 'test_case' },
-        { text: '测试套件', value: 'test_suite' },
-      ],
-      onFilter: (value, record) => record.execution_type === value,
     },
     {
       title: '名称',
@@ -325,14 +320,6 @@ const Executions: React.FC = () => {
           </div>
         );
       },
-      filters: [
-        { text: '通过', value: 'passed' },
-        { text: '失败', value: 'failed' },
-        { text: '运行中', value: 'running' },
-        { text: '等待中', value: 'pending' },
-        { text: '已取消', value: 'cancelled' },
-      ],
-      onFilter: (value, record) => record.status === value,
     },
     {
       title: '测试结果',
@@ -533,7 +520,7 @@ const Executions: React.FC = () => {
               value={filters.status}
               onChange={(value) => setFilters({ ...filters, status: value })}
             >
-              <Option value="success">成功</Option>
+              <Option value="passed">通过</Option>
               <Option value="failed">失败</Option>
               <Option value="running">运行中</Option>
               <Option value="pending">等待中</Option>
@@ -582,6 +569,10 @@ const Executions: React.FC = () => {
             },
           }}
           scroll={{ x: 1300 }}
+          onChange={(pagination, filters, sorter) => {
+            // Prevent table column filters from interfering with our API filters
+            // Only handle pagination changes here
+          }}
         />
       </Card>
     </div>

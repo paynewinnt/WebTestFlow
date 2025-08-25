@@ -25,6 +25,11 @@ func GetExecutions(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
 	status := c.Query("status")
+	projectID := c.Query("project_id")
+	environmentID := c.Query("environment_id")
+	executionType := c.Query("execution_type")
+	startDate := c.Query("start_date")
+	endDate := c.Query("end_date")
 
 	if page <= 0 {
 		page = 1
@@ -37,8 +42,32 @@ func GetExecutions(c *gin.Context) {
 	var total int64
 
 	query := database.DB.Model(&models.TestExecution{}).Where("execution_type != ?", "test_case_internal")
+	
+	// Apply filters
 	if status != "" {
 		query = query.Where("status = ?", status)
+	}
+	if projectID != "" {
+		// Filter by project through test case or test suite
+		query = query.Where(
+			"(test_case_id IN (SELECT id FROM test_cases WHERE project_id = ?)) OR " +
+			"(test_suite_id IN (SELECT id FROM test_suites WHERE project_id = ?))",
+			projectID, projectID,
+		)
+	}
+	if environmentID != "" {
+		// Filter by environment through test case or test suite
+		query = query.Where(
+			"(test_case_id IN (SELECT id FROM test_cases WHERE environment_id = ?)) OR " +
+			"(test_suite_id IN (SELECT id FROM test_suites WHERE environment_id = ?))",
+			environmentID, environmentID,
+		)
+	}
+	if executionType != "" {
+		query = query.Where("execution_type = ?", executionType)
+	}
+	if startDate != "" && endDate != "" {
+		query = query.Where("DATE(start_time) BETWEEN ? AND ?", startDate, endDate)
 	}
 
 	// Count total

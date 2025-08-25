@@ -202,6 +202,21 @@ export interface PageData<T = any> {
   total: number;
   page: number;
   page_size: number;
+  statistics?: any;
+}
+
+export interface TestCaseStatistics {
+  total: number;
+  enabled: number;
+  disabled: number;
+  high_priority: number;
+}
+
+export interface TestSuiteStatistics {
+  total: number;
+  enabled: number;
+  scheduled: number;
+  parallel: number;
 }
 
 export interface LoginRequest {
