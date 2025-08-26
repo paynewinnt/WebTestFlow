@@ -991,10 +991,22 @@ start_ocr_service() {
         # Save PID
         echo $OCR_PID > logs/pid/ocr.pid
         
-        # Wait a moment for service to start
-        sleep 2
+        # Wait for service to start with retries
+        print_status "Waiting for OCR service to be ready..."
+        local retry_count=0
+        local max_retries=10
         
-        # Verify service started successfully
+        while [ $retry_count -lt $max_retries ]; do
+            sleep 1
+            if curl -s http://localhost:8888/health > /dev/null 2>&1; then
+                print_success "OCR service started successfully with Python (PID: $OCR_PID)"
+                return 0
+            fi
+            retry_count=$((retry_count + 1))
+            echo -n "."
+        done
+        
+        # Final check after retries
         if curl -s http://localhost:8888/health > /dev/null 2>&1; then
             print_success "OCR service started successfully with Python (PID: $OCR_PID)"
             return 0
