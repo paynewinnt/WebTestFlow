@@ -241,12 +241,16 @@ class ApiService {
 
   // Execution APIs
   async getExecutions(params?: {
+    name?: string;
     page?: number;
     page_size?: number;
     status?: string;
     test_case_id?: number;
     project_id?: number;
     environment_id?: number;
+    execution_type?: string;
+    start_date?: string;
+    end_date?: string;
     include_internal?: boolean;
     parent_execution_id?: number;
   }): Promise<PageData<TestExecution>> {
@@ -255,9 +259,11 @@ class ApiService {
   }
 
   async getExecutionStatistics(params?: {
+    name?: string;
     project_id?: number;
     environment_id?: number;
     status?: string;
+    execution_type?: string;
     start_date?: string;
     end_date?: string;
   }): Promise<{
@@ -320,6 +326,11 @@ class ApiService {
 
   async getTestSuiteExecutions(suiteId: number): Promise<PageData<TestExecution>> {
     const response = await this.instance.get<ApiResponse<PageData<TestExecution>>>(`/test-suites/${suiteId}/executions`);
+    return response.data.data!;
+  }
+
+  async getTestSuiteLatestReport(suiteId: number): Promise<any> {
+    const response = await this.instance.get<ApiResponse<any>>(`/test-suites/${suiteId}/latest-report`);
     return response.data.data!;
   }
 

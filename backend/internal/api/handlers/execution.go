@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"net/url"
 	"strconv"
@@ -24,6 +25,7 @@ import (
 func GetExecutions(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
+	name := c.Query("name")
 	status := c.Query("status")
 	projectID := c.Query("project_id")
 	environmentID := c.Query("environment_id")
@@ -57,6 +59,14 @@ func GetExecutions(c *gin.Context) {
 	}
 	
 	// Apply filters
+	if name != "" {
+		// Filter by test case name or test suite name
+		query = query.Where(
+			"(test_case_id IN (SELECT id FROM test_cases WHERE name LIKE ?)) OR " +
+			"(test_suite_id IN (SELECT id FROM test_suites WHERE name LIKE ?))",
+			"%"+name+"%", "%"+name+"%",
+		)
+	}
 	if status != "" {
 		query = query.Where("status = ?", status)
 	}
@@ -113,6 +123,66 @@ func GetExecutions(c *gin.Context) {
 		// Calculate environment info for test suite executions
 		if executions[i].ExecutionType == "test_suite" && executions[i].TestSuite.ID != 0 {
 			executions[i].TestSuite.EnvironmentInfo = executions[i].TestSuite.GetEnvironmentInfo()
+			
+			// Dynamically calculate test suite execution statistics
+			// Use raw SQL to get the latest status for each unique test case
+			type TestCaseStatus struct {
+				TestCaseID uint
+				Status     string
+			}
+			
+			var latestStatuses []TestCaseStatus
+			err := database.DB.Raw(`
+				SELECT DISTINCT t1.test_case_id, t1.status
+				FROM test_executions t1
+				WHERE t1.parent_execution_id = ? 
+				AND t1.test_case_id IS NOT NULL
+				AND t1.created_at = (
+					SELECT MAX(t2.created_at) 
+					FROM test_executions t2 
+					WHERE t2.parent_execution_id = ? 
+					AND t2.test_case_id = t1.test_case_id
+				)
+			`, executions[i].ID, executions[i].ID).Scan(&latestStatuses).Error
+			
+			if err == nil && len(latestStatuses) > 0 {
+				// Calculate statistics based on unique test cases with their latest status
+				var realPassedCount, realFailedCount, realTotalCount int
+				var realStatus string = "passed" // default
+				
+				for _, testCaseStatus := range latestStatuses {
+					realTotalCount++
+					switch testCaseStatus.Status {
+					case "passed":
+						realPassedCount++
+					case "failed":
+						realFailedCount++
+						realStatus = "failed" // if any test case failed, parent should be failed
+					case "running":
+						realStatus = "running" // if any test case running, parent should be running
+					case "pending":
+						if realStatus != "failed" && realStatus != "running" {
+							realStatus = "partial" // some are done, some are pending
+						}
+					}
+				}
+				
+				// Update the execution record with real statistics
+				executions[i].TotalCount = realTotalCount
+				executions[i].PassedCount = realPassedCount
+				executions[i].FailedCount = realFailedCount
+				
+				// Update status based on test case results
+				if realFailedCount > 0 {
+					executions[i].Status = "failed"
+				} else if realPassedCount == realTotalCount {
+					executions[i].Status = "passed"
+				} else if realStatus == "running" {
+					executions[i].Status = "running"
+				} else {
+					executions[i].Status = "partial"
+				}
+			}
 		}
 	}
 
@@ -121,28 +191,39 @@ func GetExecutions(c *gin.Context) {
 
 func GetExecutionStatistics(c *gin.Context) {
 	// 获取查询参数
+	name := c.Query("name")
 	projectID := c.Query("project_id")
 	environmentID := c.Query("environment_id")
 	status := c.Query("status")
+	executionType := c.Query("execution_type")
 	startDate := c.Query("start_date")
 	endDate := c.Query("end_date")
 
 	// 构建基础查询
 	query := database.DB.Model(&models.TestExecution{}).Where("execution_type != ?", "test_case_internal")
 
-	// 应用过滤条件
-	if projectID != "" {
+	// 判断是否需要JOIN表
+	needJoin := name != "" || projectID != "" || environmentID != ""
+	if needJoin {
 		query = query.Joins("LEFT JOIN test_cases ON test_executions.test_case_id = test_cases.id").
-			Joins("LEFT JOIN test_suites ON test_executions.test_suite_id = test_suites.id").
-			Where("test_cases.project_id = ? OR test_suites.project_id = ?", projectID, projectID)
+			Joins("LEFT JOIN test_suites ON test_executions.test_suite_id = test_suites.id")
+	}
+
+	// 应用过滤条件
+	if name != "" {
+		query = query.Where("test_cases.name LIKE ? OR test_suites.name LIKE ?", "%"+name+"%", "%"+name+"%")
+	}
+	if projectID != "" {
+		query = query.Where("test_cases.project_id = ? OR test_suites.project_id = ?", projectID, projectID)
 	}
 	if environmentID != "" {
-		query = query.Joins("LEFT JOIN test_cases tc2 ON test_executions.test_case_id = tc2.id").
-			Joins("LEFT JOIN test_suites ts2 ON test_executions.test_suite_id = ts2.id").
-			Where("tc2.environment_id = ? OR ts2.environment_id = ?", environmentID, environmentID)
+		query = query.Where("test_cases.environment_id = ? OR test_suites.environment_id = ?", environmentID, environmentID)
 	}
 	if status != "" {
 		query = query.Where("test_executions.status = ?", status)
+	}
+	if executionType != "" {
+		query = query.Where("test_executions.execution_type = ?", executionType)
 	}
 	if startDate != "" && endDate != "" {
 		query = query.Where("test_executions.created_at BETWEEN ? AND ?", startDate+" 00:00:00", endDate+" 23:59:59")
@@ -156,15 +237,21 @@ func GetExecutionStatistics(c *gin.Context) {
 	var passedCount, failedCount, runningCount, pendingCount int64
 
 	baseQuery := database.DB.Model(&models.TestExecution{}).Where("execution_type != ?", "test_case_internal")
-	if projectID != "" {
+	if needJoin {
 		baseQuery = baseQuery.Joins("LEFT JOIN test_cases ON test_executions.test_case_id = test_cases.id").
-			Joins("LEFT JOIN test_suites ON test_executions.test_suite_id = test_suites.id").
-			Where("test_cases.project_id = ? OR test_suites.project_id = ?", projectID, projectID)
+			Joins("LEFT JOIN test_suites ON test_executions.test_suite_id = test_suites.id")
+	}
+	if name != "" {
+		baseQuery = baseQuery.Where("test_cases.name LIKE ? OR test_suites.name LIKE ?", "%"+name+"%", "%"+name+"%")
+	}
+	if projectID != "" {
+		baseQuery = baseQuery.Where("test_cases.project_id = ? OR test_suites.project_id = ?", projectID, projectID)
 	}
 	if environmentID != "" {
-		baseQuery = baseQuery.Joins("LEFT JOIN test_cases tc2 ON test_executions.test_case_id = tc2.id").
-			Joins("LEFT JOIN test_suites ts2 ON test_executions.test_suite_id = ts2.id").
-			Where("tc2.environment_id = ? OR ts2.environment_id = ?", environmentID, environmentID)
+		baseQuery = baseQuery.Where("test_cases.environment_id = ? OR test_suites.environment_id = ?", environmentID, environmentID)
+	}
+	if executionType != "" {
+		baseQuery = baseQuery.Where("test_executions.execution_type = ?", executionType)
 	}
 	if startDate != "" && endDate != "" {
 		baseQuery = baseQuery.Where("test_executions.created_at BETWEEN ? AND ?", startDate+" 00:00:00", endDate+" 23:59:59")
@@ -655,10 +742,10 @@ func DownloadExecutionReportPDF(c *gin.Context) {
 	c.Data(200, "application/pdf", pdfData)
 }
 
-// generatePDFFromHTML converts HTML content to PDF using Chrome headless mode
+// generatePDFFromHTML converts HTML content to PDF using Chrome headless mode (optimized for completeness)
 func generatePDFFromHTML(htmlContent string) ([]byte, error) {
-	// Create context with timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// Create context with reasonable timeout - 120 seconds for reports with many screenshots
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
 	// Get Chrome path using existing logic
@@ -670,7 +757,7 @@ func generatePDFFromHTML(htmlContent string) ([]byte, error) {
 		}
 	}
 
-	// Launch Chrome with headless options using the correct path
+	// Launch Chrome with optimized headless options
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.ExecPath(chromePath),
 		chromedp.Flag("headless", true),
@@ -683,6 +770,11 @@ func generatePDFFromHTML(htmlContent string) ([]byte, error) {
 		chromedp.Flag("disable-background-timer-throttling", true),
 		chromedp.Flag("disable-renderer-backgrounding", true),
 		chromedp.Flag("disable-backgrounding-occluded-windows", true),
+		chromedp.Flag("disable-blink-features", "AutomationControlled"),
+		chromedp.Flag("disable-extensions", true),
+		chromedp.Flag("disable-plugins", true),
+		chromedp.Flag("disable-images", false), // Keep images enabled but optimize loading
+		chromedp.Flag("aggressive-cache-discard", true), // Save memory
 		chromedp.WindowSize(1920, 1080), // Set viewport size
 	)
 
@@ -699,21 +791,181 @@ func generatePDFFromHTML(htmlContent string) ([]byte, error) {
 
 	var pdfData []byte
 	
-	// Navigate to HTML content and generate PDF
+	// Optimized PDF generation with reduced wait times
 	err := chromedp.Run(chromeCtx,
 		chromedp.Navigate(dataURL),
 		chromedp.WaitReady("body", chromedp.ByQuery),
-		chromedp.Sleep(3*time.Second), // Allow more time for full rendering
+		// Smart image loading check - quickly identify and handle broken images
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			// First, quickly mark all images with onerror handlers to fail fast
+			chromedp.Evaluate(`
+				(function() {
+					const images = document.querySelectorAll('img');
+					images.forEach(img => {
+						// If image already has onerror that hides it, trigger it for non-loading images
+						if (!img.complete && img.onerror) {
+							// Set a short timeout to trigger error handler for stuck images
+							setTimeout(() => {
+								if (!img.complete || img.naturalWidth === 0) {
+									img.style.display = 'none';
+								}
+							}, 2000);
+						}
+					});
+				})()
+			`, nil).Do(ctx)
+			
+			// Wait briefly for error handlers to trigger
+			time.Sleep(2 * time.Second)
+			
+			// Now count only visible images
+			var visibleCount int
+			chromedp.Evaluate(`
+				Array.from(document.querySelectorAll('img')).filter(img => 
+					img.style.display !== 'none' && img.offsetParent !== null
+				).length
+			`, &visibleCount).Do(ctx)
+			
+			if visibleCount > 0 {
+				log.Printf("PDF generation: Waiting for %d visible images to load...", visibleCount)
+				
+				// Initial wait for images to start loading
+				time.Sleep(3 * time.Second)
+				
+				// More attempts for reports with many images
+				maxAttempts := 20
+				if visibleCount > 100 {
+					maxAttempts = 30 // Even more attempts for large reports
+				}
+				
+				lastLoadedCount := 0
+				noProgressCount := 0
+				pendingCount := 0
+				
+				// Check for image loading with progressive retries
+				for attempt := 0; attempt < maxAttempts; attempt++ {
+					var loadStatus map[string]interface{}
+					err := chromedp.Evaluate(`
+						(function() {
+							const images = Array.from(document.querySelectorAll('img')).filter(img => 
+								img.style.display !== 'none' && img.offsetParent !== null
+							);
+							if (images.length === 0) return {loaded: 0, total: 0, complete: true, realTotal: 0};
+							
+							let loaded = 0;
+							let failed = 0;
+							let pending = 0;
+							let total = images.length;
+							
+							for (let img of images) {
+								if (img.complete) {
+									if (img.naturalWidth > 0) {
+										loaded++;
+									} else if (!img.src || img.src === '' || img.src === window.location.href) {
+										// No valid source, mark as failed
+										img.style.display = 'none';
+										failed++;
+									} else {
+										// Has source but failed to load
+										failed++;
+									}
+								} else {
+									// Still loading
+									pending++;
+								}
+							}
+							
+							// Real total is the count of images that actually have a chance to load
+							const realTotal = loaded + pending;
+							
+							// Consider complete if all pending images are done loading
+							const complete = pending === 0;
+							const percentLoaded = total > 0 ? (loaded / total) : 1;
+							
+							return {
+								loaded: loaded, 
+								failed: failed,
+								pending: pending,
+								total: total,
+								realTotal: realTotal,
+								complete: complete,
+								percentLoaded: Math.round(percentLoaded * 100)
+							};
+						})()
+					`, &loadStatus).Do(ctx)
+					
+					if err == nil {
+						loaded := int(loadStatus["loaded"].(float64))
+						failed := int(loadStatus["failed"].(float64))
+						pending := int(loadStatus["pending"].(float64))
+						total := int(loadStatus["total"].(float64))
+						realTotal := int(loadStatus["realTotal"].(float64))
+						complete := loadStatus["complete"].(bool)
+						percentLoaded := int(loadStatus["percentLoaded"].(float64))
+						
+						// Update pending count for wait time calculation
+						pendingCount = pending
+						
+						log.Printf("PDF generation: Image loading progress - %d/%d loaded (%d%%), %d pending, %d failed (attempt %d/%d)", 
+							loaded, total, percentLoaded, pending, failed, attempt+1, maxAttempts)
+						
+						// Track progress
+						if loaded > lastLoadedCount {
+							lastLoadedCount = loaded
+							noProgressCount = 0
+						} else {
+							noProgressCount++
+						}
+						
+						// If no progress for 5 attempts and we have some images, proceed
+						if noProgressCount >= 5 && loaded > 0 {
+							log.Printf("PDF generation: No more progress after 5 attempts, proceeding with %d images", loaded)
+							break
+						}
+						
+						// Accept if all pending images are done
+						if complete || pending == 0 {
+							log.Printf("PDF generation: All images processed - %d loaded, %d failed", loaded, failed)
+							break
+						}
+						
+						// For large reports, accept if we have most of the real images
+						if realTotal > 0 && loaded >= realTotal {
+							log.Printf("PDF generation: All valid images loaded (%d/%d)", loaded, realTotal)
+							break
+						}
+					}
+					
+					// Progressive wait - longer waits for more pending images
+					waitTime := 2
+					if pendingCount > 50 {
+						waitTime = 3
+					}
+					if pendingCount > 100 {
+						waitTime = 4
+					}
+					time.Sleep(time.Duration(waitTime) * time.Second)
+				}
+				
+				// Final wait for rendering
+				time.Sleep(2 * time.Second)
+			} else {
+				log.Printf("PDF generation: No visible images to wait for")
+			}
+			return nil
+		}),
+		// Additional wait for final rendering and layout stabilization
+		chromedp.Sleep(3*time.Second),
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			// Configure PDF printing options - no headers/footers
 			printParams := page.PrintToPDF().
 				WithPrintBackground(true).      // Include background colors and images
-				WithMarginTop(0.5).            // Slightly larger top margin
-				WithMarginBottom(0.5).         // Slightly larger bottom margin  
-				WithMarginLeft(0.5).           // Slightly larger left margin
-				WithMarginRight(0.5).          // Slightly larger right margin
+				WithMarginTop(0.5).            // Top margin
+				WithMarginBottom(0.5).         // Bottom margin  
+				WithMarginLeft(0.5).           // Left margin
+				WithMarginRight(0.5).          // Right margin
 				WithPaperWidth(8.27).          // A4 width in inches
-				WithPaperHeight(11.69).        // A4 height in inches (more precise)
+				WithPaperHeight(11.69).        // A4 height in inches
 				WithDisplayHeaderFooter(false).// No headers/footers
 				WithPreferCSSPageSize(false).  // Use our paper size
 				WithScale(1.0)                 // Full scale
@@ -799,7 +1051,7 @@ func generateHTMLReport(execution *models.TestExecution) string {
 	var steps string
 	var screenshotPaths []string
 	
-	var showSeparateScreenshots bool = true
+	var showSeparateScreenshots bool = false // 不显示单独的截图部分，因为截图已包含在详细测试结果中
 	
 	if execution.TestCaseID != nil {
 		// Single test case execution
@@ -809,7 +1061,7 @@ func generateHTMLReport(execution *models.TestExecution) string {
 	} else if execution.TestSuiteID != nil {
 		// Test suite execution - get detailed test case results
 		steps, screenshotPaths = parseTestSuiteExecutionNew(execution, baseURL)
-		showSeparateScreenshots = false // Screenshots are already shown in test cases
+		showSeparateScreenshots = false // 截图已包含在详细测试结果中，不需要单独显示
 	} else {
 		steps = parseExecutionLogs(execution.ExecutionLogs)
 		screenshotPaths = parseScreenshotPaths(execution.Screenshots)
@@ -948,7 +1200,7 @@ func generateHTMLReport(execution *models.TestExecution) string {
         }
         .screenshots-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
             gap: 20px;
             margin: 20px 0;
         }
@@ -961,10 +1213,16 @@ func generateHTMLReport(execution *models.TestExecution) string {
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
         .screenshot-item img {
-            max-width: 100%%;
+            max-width: 300px;
+            width: 100%;
             height: auto;
             border-radius: 4px;
             box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        .screenshot-item img:hover {
+            transform: scale(1.02);
         }
         .screenshot-title {
             font-weight: bold;

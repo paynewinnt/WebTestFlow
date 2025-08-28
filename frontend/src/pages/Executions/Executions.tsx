@@ -16,6 +16,7 @@ import {
   Popconfirm,
   Switch,
   Tooltip,
+  Input,
 } from 'antd';
 import dayjs from 'dayjs';
 import {
@@ -48,12 +49,14 @@ const Executions: React.FC = () => {
     avg_duration: 0,
   });
   const [filters, setFilters] = useState<{
+    name?: string;
     project_id?: number;
     environment_id?: number;
     status?: string;
     execution_type?: string;
     date_range?: any;
   }>({
+    name: undefined,
     project_id: undefined,
     environment_id: undefined,
     status: undefined,
@@ -130,9 +133,11 @@ const Executions: React.FC = () => {
   const loadStatistics = async () => {
     try {
       const params: any = {};
+      if (filters.name) params.name = filters.name;
       if (filters.project_id) params.project_id = filters.project_id;
       if (filters.environment_id) params.environment_id = filters.environment_id;
       if (filters.status) params.status = filters.status;
+      if (filters.execution_type) params.execution_type = filters.execution_type;
       if (filters.date_range && filters.date_range.length === 2 && filters.date_range[0] && filters.date_range[1]) {
         params.start_date = dayjs(filters.date_range[0]).format('YYYY-MM-DD');
         params.end_date = dayjs(filters.date_range[1]).format('YYYY-MM-DD');
@@ -153,6 +158,7 @@ const Executions: React.FC = () => {
         page_size: pagination.pageSize,
       };
 
+      if (filters.name) params.name = filters.name;
       if (filters.project_id) params.project_id = filters.project_id;
       if (filters.environment_id) params.environment_id = filters.environment_id;
       if (filters.status) params.status = filters.status;
@@ -474,6 +480,16 @@ const Executions: React.FC = () => {
       <Card>
         <div style={{ marginBottom: 16 }}>
           <Space wrap>
+            <Input.Search
+              placeholder="请输入名称"
+              style={{ width: 200 }}
+              allowClear
+              value={filters.name}
+              onChange={(e) => setFilters({ ...filters, name: e.target.value })}
+              onSearch={(value) => setFilters({ ...filters, name: value })}
+              enterButton="查询"
+            />
+            
             <Select
               placeholder="选择项目"
               style={{ width: 200 }}

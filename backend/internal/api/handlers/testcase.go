@@ -19,6 +19,7 @@ func GetTestCases(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
 	projectID := c.Query("project_id")
+	name := c.Query("name")
 
 	if page <= 0 {
 		page = 1
@@ -35,6 +36,9 @@ func GetTestCases(c *gin.Context) {
 	query := database.DB.Model(&models.TestCase{}).Where("status = ?", 1)
 	if projectID != "" {
 		query = query.Where("project_id = ?", projectID)
+	}
+	if name != "" {
+		query = query.Where("name LIKE ?", "%"+name+"%")
 	}
 
 	// Count total

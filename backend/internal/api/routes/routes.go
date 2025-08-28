@@ -114,6 +114,8 @@ func SetupRoutes(cfg *config.Config) *gin.Engine {
 				testSuites.GET("/:id/latest-report", handlers.GetLatestTestSuiteReport)
 				testSuites.GET("/:id/latest-report-html", handlers.DownloadLatestTestSuiteReportHTML)
 				testSuites.GET("/:id/latest-report-pdf", handlers.DownloadLatestTestSuiteReportPDF)
+				testSuites.GET("/:id/latest-report-html-with-screenshots", handlers.DownloadLatestTestSuiteReportHTMLWithScreenshots)
+				testSuites.GET("/:id/latest-report-pdf-with-screenshots", handlers.DownloadLatestTestSuiteReportPDFWithScreenshots)
 			}
 
 			// Test execution and reporting

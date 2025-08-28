@@ -21,11 +21,12 @@ import {
   Statistic,
   Transfer,
   Divider,
+  Spin,
+  Alert,
   Dropdown,
 } from 'antd';
 import dayjs from 'dayjs';
 import type { TransferDirection } from 'antd/es/transfer';
-import type { MenuProps } from 'antd';
 import {
   PlusOutlined,
   EditOutlined,
@@ -33,9 +34,15 @@ import {
   PlayCircleOutlined,
   EyeOutlined,
   ReloadOutlined,
-  DownloadOutlined,
   FileTextOutlined,
   FilePdfOutlined,
+  FileImageOutlined,
+  CheckCircleOutlined,
+  CloseCircleOutlined,
+  ClockCircleOutlined,
+  MinusCircleOutlined,
+  SearchOutlined,
+  MoreOutlined,
 } from '@ant-design/icons';
 import { api } from '../../services/api';
 import type { TestSuite, Project, Environment, TestCase, TestSuiteStatistics } from '../../types';
@@ -50,7 +57,6 @@ const TestSuites: React.FC = () => {
   const [testSuites, setTestSuites] = useState<TestSuite[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [environments, setEnvironments] = useState<Environment[]>([]);
-  const [testCases, setTestCases] = useState<TestCase[]>([]);
   const [loading, setLoading] = useState(false);
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [isDetailDrawerVisible, setIsDetailDrawerVisible] = useState(false);
@@ -73,6 +79,10 @@ const TestSuites: React.FC = () => {
     scheduled: 0,
     parallel: 0,
   });
+  const [searchKeyword, setSearchKeyword] = useState<string>('');
+  const [isLatestReportModalVisible, setIsLatestReportModalVisible] = useState(false);
+  const [latestReportData, setLatestReportData] = useState<any>(null);
+  const [loadingLatestReport, setLoadingLatestReport] = useState(false);
 
   useEffect(() => {
     loadTestSuites();
@@ -88,7 +98,6 @@ const TestSuites: React.FC = () => {
       ]);
       setProjects(projectsData.list);
       setEnvironments(environmentsData);
-      setTestCases(testCasesData.list);
       
       // Prepare transfer data
       const transferItems = testCasesData.list.map(tc => ({
@@ -106,10 +115,14 @@ const TestSuites: React.FC = () => {
   const loadTestSuites = async () => {
     setLoading(true);
     try {
-      const response = await api.getTestSuites({
+      const params: any = {
         page: pagination.current,
         page_size: pagination.pageSize,
-      });
+      };
+      if (searchKeyword.trim()) {
+        params.name = searchKeyword.trim();
+      }
+      const response = await api.getTestSuites(params);
       setTestSuites(response.list);
       setPagination(prev => ({
         ...prev,
@@ -126,6 +139,19 @@ const TestSuites: React.FC = () => {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleSearch = () => {
+    setPagination(prev => ({ ...prev, current: 1 }));
+    loadTestSuites();
+  };
+
+  const handleSearchReset = () => {
+    setSearchKeyword('');
+    setPagination(prev => ({ ...prev, current: 1 }));
+    setTimeout(() => {
+      loadTestSuites();
+    }, 0);
   };
 
   const handleCreate = () => {
@@ -233,37 +259,137 @@ const TestSuites: React.FC = () => {
   };
 
   // 获取最新测试报告
-  const handleDownloadLatestReport = (testSuite: TestSuite, format: 'html' | 'pdf') => {
-    const url = format === 'html' 
-      ? `/api/v1/test-suite-latest-report-html/${testSuite.id}`
-      : `/api/v1/test-suite-latest-report-pdf/${testSuite.id}`;
-    
-    // 创建隐藏的链接进行下载
-    const link = document.createElement('a');
-    link.href = url;
-    link.style.display = 'none';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    
-    message.success(`正在下载${format.toUpperCase()}格式的最新测试报告...`);
+  const handleDownloadLatestReport = async (testSuite: TestSuite) => {
+    setLoadingLatestReport(true);
+    try {
+      const response = await api.getTestSuiteLatestReport(testSuite.id);
+      setLatestReportData(response);
+      setIsLatestReportModalVisible(true);
+    } catch (error) {
+      console.error('Failed to get latest report:', error);
+      message.error('获取最新报告失败');
+    } finally {
+      setLoadingLatestReport(false);
+    }
   };
 
-  // 生成最新测试报告下拉菜单
-  const getLatestReportMenuItems = (testSuite: TestSuite): MenuProps['items'] => [
-    {
-      key: 'html',
-      label: 'HTML报告',
-      icon: <FileTextOutlined />,
-      onClick: () => handleDownloadLatestReport(testSuite, 'html'),
-    },
-    {
-      key: 'pdf',
-      label: 'PDF报告',
-      icon: <FilePdfOutlined />,
-      onClick: () => handleDownloadLatestReport(testSuite, 'pdf'),
-    },
-  ];
+
+  // 处理直接导出报告（新的按钮式导出）
+  const handleDirectExport = async (format: 'html' | 'pdf' | 'html_with_screenshots' | 'pdf_with_screenshots') => {
+    if (!latestReportData || !latestReportData.test_suite) {
+      message.error('没有可导出的数据');
+      return;
+    }
+    const testSuiteId = latestReportData.test_suite?.id;
+    if (!testSuiteId) {
+      message.error('无效的测试套件ID');
+      return;
+    }
+
+    try {
+      const formatName = format === 'html' ? 'HTML报告' : 
+                        format === 'pdf' ? 'PDF报告' :
+                        format === 'html_with_screenshots' ? 'HTML报告（带截图）' :
+                        'PDF报告（带截图）';
+      message.loading(`正在生成${formatName}...`, 0);
+      
+      // 根据选择的格式调用相应的API
+      let endpoint: string;
+      switch (format) {
+        case 'html':
+          endpoint = `test-suites/${testSuiteId}/latest-report-html`;
+          break;
+        case 'pdf':
+          endpoint = `test-suites/${testSuiteId}/latest-report-pdf`;
+          break;
+        case 'html_with_screenshots':
+          endpoint = `test-suites/${testSuiteId}/latest-report-html-with-screenshots`;
+          break;
+        case 'pdf_with_screenshots':
+          endpoint = `test-suites/${testSuiteId}/latest-report-pdf-with-screenshots`;
+          break;
+        default:
+          endpoint = `test-suites/${testSuiteId}/latest-report-html`;
+      }
+      
+      // 直接调用API导出
+      const response = await fetch(`/api/v1/${endpoint}`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`,
+          'Content-Type': 'application/json',
+        },
+      });
+      
+      message.destroy(); // 清除loading消息
+      
+      if (!response.ok) {
+        throw new Error(`导出失败: ${response.status}`);
+      }
+      
+      // 获取文件blob并下载
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      
+      // 尝试从响应头获取文件名
+      let fileName = '';
+      const contentDisposition = response.headers.get('Content-Disposition');
+      if (contentDisposition) {
+        // 优先尝试解析 filename*=UTF-8''encoded_filename 格式（支持中文）
+        let matches = contentDisposition.match(/filename\*=UTF-8''([^;]+)/);
+        if (matches && matches[1]) {
+          try {
+            fileName = decodeURIComponent(matches[1]);
+          } catch (e) {
+            console.warn('Failed to decode filename*:', e);
+          }
+        }
+        
+        // 如果上面失败，尝试解析普通 filename="..." 格式
+        if (!fileName) {
+          matches = contentDisposition.match(/filename="([^"]+)"/);
+          if (matches && matches[1]) {
+            fileName = matches[1];
+          }
+        }
+      }
+      
+      // 如果无法从响应头获取文件名，使用默认格式
+      if (!fileName) {
+        const fileExtension = format.includes('html') ? 'html' : 'pdf';
+        fileName = format.includes('with_screenshots') 
+          ? `test_suite_${testSuiteId}_latest_report_with_screenshots.${fileExtension}`
+          : `test_suite_${testSuiteId}_latest_report.${fileExtension}`;
+      }
+      
+      link.download = fileName;
+      link.style.display = 'none';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+      
+      message.success(`${formatName}已成功导出`);
+    } catch (error) {
+      message.destroy(); // 清除loading消息
+      console.error('Export error:', error);
+      message.error(`导出失败: ${error instanceof Error ? error.message : '未知错误'}`);
+    }
+  };
+
+  // 执行单个测试用例
+  const handleExecuteTestCase = async (testCaseId: number, testCaseName: string) => {
+    try {
+      const response = await api.executeTestCase(testCaseId, { is_visual: true });
+      message.success(`测试用例"${testCaseName}"执行已启动（可视化模式）`);
+      console.log('Test case execution started:', response);
+    } catch (error) {
+      console.error('Failed to execute test case:', error);
+      message.error(`执行测试用例"${testCaseName}"失败`);
+    }
+  };
 
   const getPriorityColor = (priority: number) => {
     const colors = { 1: 'blue', 2: 'orange', 3: 'red' };
@@ -389,61 +515,79 @@ const TestSuites: React.FC = () => {
       title: '操作',
       key: 'action',
       width: 280,
-      render: (_, record) => (
-        <Space size="small">
-          <Button
-            type="link"
-            size="small"
-            icon={<EyeOutlined />}
-            onClick={() => handleViewDetails(record)}
-          >
-            详情
-          </Button>
-          <Button
-            type="link"
-            size="small"
-            icon={<PlayCircleOutlined />}
-            onClick={() => handleExecute(record)}
-          >
-            执行
-          </Button>
-          <Button
-            type="link"
-            size="small"
-            icon={<EditOutlined />}
-            onClick={() => handleEdit(record)}
-          >
-            编辑
-          </Button>
-          <Dropdown
-            menu={{ items: getLatestReportMenuItems(record) }}
-            trigger={['click']}
-          >
+      render: (_, record) => {
+        const items = [
+          {
+            key: 'execute',
+            label: '执行测试',
+            icon: <PlayCircleOutlined />,
+          },
+          {
+            key: 'edit',
+            label: '编辑',
+            icon: <EditOutlined />,
+          },
+          {
+            type: 'divider' as const,
+          },
+          {
+            key: 'delete',
+            label: '删除',
+            icon: <DeleteOutlined />,
+            danger: true,
+          },
+        ];
+
+        const handleMenuClick = ({ key }: { key: string }) => {
+          switch (key) {
+            case 'execute':
+              handleExecute(record);
+              break;
+            case 'edit':
+              handleEdit(record);
+              break;
+            case 'delete':
+              Modal.confirm({
+                title: '确定删除这个测试套件吗？',
+                onOk: () => handleDelete(record.id),
+                okText: '确定',
+                cancelText: '取消',
+              });
+              break;
+          }
+        };
+
+        return (
+          <Space size="small">
             <Button
               type="link"
               size="small"
-              icon={<DownloadOutlined />}
+              icon={<EyeOutlined />}
+              onClick={() => handleViewDetails(record)}
+            >
+              详情
+            </Button>
+            <Button
+              type="link"
+              size="small"
+              icon={<FileTextOutlined />}
+              loading={loadingLatestReport}
+              onClick={() => handleDownloadLatestReport(record)}
             >
               最新报告
             </Button>
-          </Dropdown>
-          <Popconfirm
-            title="确定删除这个测试套件吗？"
-            onConfirm={() => handleDelete(record.id)}
-            okText="确定"
-            cancelText="取消"
-          >
-            <Button
-              type="link"
-              size="small"
-              danger
-              icon={<DeleteOutlined />}
+            <Dropdown
+              menu={{ 
+                items,
+                onClick: handleMenuClick
+              }}
+              trigger={['click']}
             >
-              删除
-            </Button>
-          </Popconfirm>
-        </Space>
-      ),
+              <Button type="link" size="small">更多 ...</Button>
+            </Dropdown>
+          </Space>
+        );
+      },
     },
   ];
 
@@ -492,6 +636,24 @@ const TestSuites: React.FC = () => {
             <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>
               新建测试套件
             </Button>
+            <Input.Search
+              placeholder="请输入测试套件名称"
+              value={searchKeyword}
+              onChange={(e) => setSearchKeyword(e.target.value)}
+              onSearch={handleSearch}
+              onPressEnter={handleSearch}
+              style={{ width: 300 }}
+              enterButton={
+                <Button type="primary" icon={<SearchOutlined />}>
+                  搜索
+                </Button>
+              }
+            />
+            {searchKeyword && (
+              <Button onClick={handleSearchReset}>
+                清空搜索
+              </Button>
+            )}
             <Button icon={<ReloadOutlined />} onClick={loadTestSuites}>
               刷新
             </Button>
@@ -835,6 +997,188 @@ const TestSuites: React.FC = () => {
               </div>
             </div>
           </div>
+        )}
+      </Modal>
+
+      {/* 最新报告弹窗 */}
+      <Modal
+        title="测试套件最新执行报告"
+        open={isLatestReportModalVisible}
+        onCancel={() => setIsLatestReportModalVisible(false)}
+        footer={[
+          <div key="export-buttons" style={{ display: 'flex', justifyContent: 'center', gap: '12px', marginBottom: '8px' }}>
+            <Button 
+              type="primary" 
+              icon={<FileTextOutlined />}
+              onClick={() => handleDirectExport('html')}
+            >
+              HTML报告
+            </Button>
+            <Button 
+              type="primary" 
+              icon={<FilePdfOutlined />}
+              onClick={() => handleDirectExport('pdf')}
+            >
+              PDF报告
+            </Button>
+            <Button 
+              type="primary" 
+              icon={<FileImageOutlined />}
+              onClick={() => handleDirectExport('html_with_screenshots')}
+            >
+              HTML报告（带截图）
+            </Button>
+            {/* PDF带截图功能暂时隐藏 */}
+            {/* <Button 
+              type="primary" 
+              icon={<FilePdfOutlined />}
+              onClick={() => handleDirectExport('pdf_with_screenshots')}
+            >
+              PDF报告（带截图）
+            </Button> */}
+          </div>,
+          <Button key="close" onClick={() => setIsLatestReportModalVisible(false)}>
+            关闭
+          </Button>
+        ]}
+        width={900}
+        styles={{ body: { maxHeight: '600px', overflow: 'auto' } }}
+      >
+        {loadingLatestReport ? (
+          <div style={{ textAlign: 'center', padding: '50px' }}>
+            <Spin size="large" tip="正在加载最新报告..." />
+          </div>
+        ) : latestReportData ? (
+          <div>
+            {/* 汇总统计 */}
+            <Card style={{ marginBottom: 16 }}>
+              <Row gutter={16}>
+                <Col span={6}>
+                  <Statistic
+                    title="总用例数"
+                    value={latestReportData.summary?.total_count || 0}
+                    valueStyle={{ color: '#1890ff' }}
+                  />
+                </Col>
+                <Col span={6}>
+                  <Statistic
+                    title="通过数"
+                    value={latestReportData.summary?.passed_count || 0}
+                    valueStyle={{ color: '#52c41a' }}
+                    prefix={<CheckCircleOutlined />}
+                  />
+                </Col>
+                <Col span={6}>
+                  <Statistic
+                    title="失败数"
+                    value={latestReportData.summary?.failed_count || 0}
+                    valueStyle={{ color: '#ff4d4f' }}
+                    prefix={<CloseCircleOutlined />}
+                  />
+                </Col>
+                <Col span={6}>
+                  <Statistic
+                    title="未执行"
+                    value={latestReportData.summary?.not_executed || 0}
+                    valueStyle={{ color: '#8c8c8c' }}
+                    prefix={<MinusCircleOutlined />}
+                  />
+                </Col>
+              </Row>
+            </Card>
+
+            {/* 用例执行详情列表 */}
+            <Card title="测试用例执行详情">
+              <List
+                dataSource={latestReportData.executions || []}
+                renderItem={(item: any, index: number) => (
+                  <List.Item
+                    actions={
+                      (item.status === 'failed' || item.status === 'not_executed') && item.test_case?.id ? [
+                        <Button
+                          key="execute"
+                          type="link"
+                          size="small"
+                          icon={<PlayCircleOutlined />}
+                          onClick={() => handleExecuteTestCase(item.test_case.id, item.test_case.name)}
+                        >
+                          执行测试
+                        </Button>
+                      ] : undefined
+                    }
+                  >
+                    <List.Item.Meta
+                      avatar={
+                        item.status === 'passed' ? (
+                          <CheckCircleOutlined style={{ fontSize: 24, color: '#52c41a' }} />
+                        ) : item.status === 'failed' ? (
+                          <CloseCircleOutlined style={{ fontSize: 24, color: '#ff4d4f' }} />
+                        ) : item.status === 'not_executed' ? (
+                          <MinusCircleOutlined style={{ fontSize: 24, color: '#8c8c8c' }} />
+                        ) : (
+                          <ClockCircleOutlined style={{ fontSize: 24, color: '#faad14' }} />
+                        )
+                      }
+                      title={
+                        <Space>
+                          <Text strong>{index + 1}. {item.test_case?.name || '未知用例'}</Text>
+                          {item.test_case?.environment?.name && (
+                            <Tag color="blue">{item.test_case.environment.name}</Tag>
+                          )}
+                          {item.test_case?.device?.name && (
+                            <Tag color="green">{item.test_case.device.name}</Tag>
+                          )}
+                        </Space>
+                      }
+                      description={
+                        <div>
+                          <div>
+                            状态: <Tag color={
+                              item.status === 'passed' ? 'success' :
+                              item.status === 'failed' ? 'error' :
+                              item.status === 'not_executed' ? 'default' :
+                              'warning'
+                            }>
+                              {item.status === 'passed' ? '通过' :
+                               item.status === 'failed' ? '失败' :
+                               item.status === 'not_executed' ? '未执行' :
+                               item.status}
+                            </Tag>
+                            {item.duration > 0 && (
+                              <span style={{ marginLeft: 16 }}>
+                                耗时: {(item.duration / 1000).toFixed(2)}秒
+                              </span>
+                            )}
+                          </div>
+                          {item.error_message && (
+                            <Alert
+                              message={item.error_message}
+                              type="error"
+                              showIcon
+                              style={{ marginTop: 8 }}
+                            />
+                          )}
+                          {item.start_time && dayjs(item.start_time).isValid() && dayjs(item.start_time).year() > 1900 && (
+                            <div style={{ marginTop: 8, color: '#8c8c8c', fontSize: 12 }}>
+                              执行时间: {dayjs(item.start_time).format('YYYY-MM-DD HH:mm:ss')}
+                            </div>
+                          )}
+                        </div>
+                      }
+                    />
+                  </List.Item>
+                )}
+              />
+            </Card>
+
+          </div>
+        ) : (
+          <Alert
+            message="暂无数据"
+            description="无法获取最新报告数据"
+            type="warning"
+            showIcon
+          />
         )}
       </Modal>
     </div>

@@ -22,6 +22,7 @@ import {
   Empty,
   Dropdown,
   Modal,
+  Input,
 } from 'antd';
 import {
   EyeOutlined,
@@ -66,11 +67,13 @@ const Reports: React.FC = () => {
   const [suiteTestCases, setSuiteTestCases] = useState<TestExecution[]>([]);
   const [selectedTestCaseFromSuite, setSelectedTestCaseFromSuite] = useState<TestExecution | null>(null);
   const [filters, setFilters] = useState<{
+    name?: string;
     project_id?: number;
     environment_id?: number;
     status?: string;
     date_range?: any;
   }>({
+    name: undefined,
     project_id: undefined,
     environment_id: undefined,
     status: undefined,
@@ -117,6 +120,7 @@ const Reports: React.FC = () => {
   const loadStatistics = async () => {
     try {
       const params: any = {};
+      if (filters.name) params.name = filters.name;
       if (filters.project_id) params.project_id = filters.project_id;
       if (filters.environment_id) params.environment_id = filters.environment_id;
       if (filters.status) params.status = filters.status;
@@ -140,6 +144,7 @@ const Reports: React.FC = () => {
         page_size: pagination.pageSize,
       };
 
+      if (filters.name) params.name = filters.name;
       if (filters.project_id) params.project_id = filters.project_id;
       if (filters.environment_id) params.environment_id = filters.environment_id;
       if (filters.status) params.status = filters.status;
@@ -630,12 +635,13 @@ const Reports: React.FC = () => {
             icon: <FileTextOutlined />,
             onClick: () => handleDownloadReport(record, 'html'),
           },
-          {
-            key: 'pdf',
-            label: 'PDF报告',
-            icon: <FilePdfOutlined />,
-            onClick: () => handleDownloadReport(record, 'pdf'),
-          },
+          // PDF功能暂时隐藏，保留函数
+          // {
+          //   key: 'pdf',
+          //   label: 'PDF报告',
+          //   icon: <FilePdfOutlined />,
+          //   onClick: () => handleDownloadReport(record, 'pdf'),
+          // },
         ];
 
         return (
@@ -647,15 +653,6 @@ const Reports: React.FC = () => {
               onClick={() => handleViewDetails(record)}
             >
               详情
-            </Button>
-            <Button
-              type="link"
-              size="small"
-              icon={<PlayCircleOutlined />}
-              onClick={() => handleContinueExecution(record)}
-              disabled={record.status === 'running' || record.status === 'pending'}
-            >
-              继续执行
             </Button>
             <Dropdown
               menu={{ items: reportMenuItems }}
@@ -671,6 +668,17 @@ const Reports: React.FC = () => {
                 导出报告
               </Button>
             </Dropdown>
+            {record.status !== 'passed' && (
+              <Button
+                type="link"
+                size="small"
+                icon={<PlayCircleOutlined />}
+                onClick={() => handleContinueExecution(record)}
+                disabled={record.status === 'running' || record.status === 'pending'}
+              >
+                继续执行
+              </Button>
+            )}
           </Space>
         );
       },
@@ -720,6 +728,16 @@ const Reports: React.FC = () => {
       <Card>
         <div style={{ marginBottom: 16 }}>
           <Space wrap>
+            <Input.Search
+              placeholder="请输入名称"
+              style={{ width: 200 }}
+              allowClear
+              value={filters.name}
+              onChange={(e) => setFilters({ ...filters, name: e.target.value })}
+              onSearch={(value) => setFilters({ ...filters, name: value })}
+              enterButton="查询"
+            />
+            
             <Select
               placeholder="选择项目"
               style={{ width: 200 }}
@@ -808,7 +826,9 @@ const Reports: React.FC = () => {
         open={isDetailDrawerVisible}
       >
         {selectedExecution && (
-          <div>
+          <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+            {/* 可滚动内容区域 */}
+            <div style={{ flex: 1, overflow: 'auto', paddingBottom: selectedTestCaseFromSuite ? '60px' : '0' }}>
             {/* 测试套件详情 - 显示用例列表 */}
             {showTestSuiteDetails && (
               <div>
@@ -952,19 +972,6 @@ const Reports: React.FC = () => {
             {/* 单个用例详情或从套件中点击的用例详情 */}
             {!showTestSuiteDetails && (
               <div>
-                {/* 如果是从测试套件点击进来的，显示返回按钮 */}
-                {selectedTestCaseFromSuite && (
-                  <div style={{ marginBottom: 16 }}>
-                    <Button 
-                      icon={<span>←</span>} 
-                      onClick={handleBackToSuiteDetails}
-                      size="small"
-                    >
-                      返回套件详情
-                    </Button>
-                  </div>
-                )}
-
                 <Descriptions title="基本信息" bordered column={1} size="small">
                   <Descriptions.Item label="执行ID">
                     {selectedTestCaseFromSuite?.id || selectedExecution.id}
@@ -1191,6 +1198,30 @@ const Reports: React.FC = () => {
                 description="暂无详细信息" 
                 style={{ marginTop: 40 }}
               />
+            )}
+            </div>
+
+            {/* 固定在底部的按钮区域 */}
+            {selectedTestCaseFromSuite && !showTestSuiteDetails && (
+              <div style={{
+                position: 'absolute',
+                bottom: 0,
+                left: 0,
+                right: 0,
+                padding: '16px 24px',
+                backgroundColor: '#fff',
+                borderTop: '1px solid #f0f0f0',
+                boxShadow: '0 -2px 8px rgba(0, 0, 0, 0.1)'
+              }}>
+                <Button 
+                  icon={<span>←</span>} 
+                  onClick={handleBackToSuiteDetails}
+                  type="primary"
+                  block
+                >
+                  返回套件详情
+                </Button>
+              </div>
             )}
           </div>
         )}

@@ -229,12 +229,11 @@ const DeviceManagement: React.FC = () => {
     {
       title: '操作',
       key: 'action',
-      fixed: 'right',
-      width: 150,
       render: (_, record: Device) => (
-        <Space>
+        <Space size="small">
           <Button
-            type="text"
+            type="link"
+            size="small"
             icon={<EditOutlined />}
             onClick={() => handleEdit(record)}
           >
@@ -247,7 +246,8 @@ const DeviceManagement: React.FC = () => {
             cancelText="取消"
           >
             <Button
-              type="text"
+              type="link"
+              size="small"
               danger
               icon={<DeleteOutlined />}
             >
@@ -268,7 +268,8 @@ const DeviceManagement: React.FC = () => {
             设备管理
           </Space>
         }
-        extra={
+      >
+        <div style={{ marginBottom: 16 }}>
           <Button
             type="primary"
             icon={<PlusOutlined />}
@@ -276,8 +277,7 @@ const DeviceManagement: React.FC = () => {
           >
             新建设备
           </Button>
-        }
-      >
+        </div>
         <Table
           columns={columns}
           dataSource={devices}

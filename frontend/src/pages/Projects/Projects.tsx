@@ -141,17 +141,19 @@ const Projects: React.FC = () => {
       title: '操作',
       key: 'actions',
       render: (_: any, record: Project) => (
-        <Space>
+        <Space size="small">
           <Button 
-            icon={<EyeOutlined />} 
+            type="link"
             size="small"
+            icon={<EyeOutlined />} 
             onClick={() => {/* TODO: View details */}}
           >
             查看
           </Button>
           <Button 
-            icon={<EditOutlined />} 
+            type="link"
             size="small"
+            icon={<EditOutlined />} 
             onClick={() => handleEdit(record)}
           >
             编辑
@@ -163,8 +165,9 @@ const Projects: React.FC = () => {
             cancelText="取消"
           >
             <Button 
+              type="link"
+              size="small"
               icon={<DeleteOutlined />} 
-              size="small" 
               danger
             >
               删除

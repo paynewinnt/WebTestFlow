@@ -39,6 +39,7 @@ import {
   StopOutlined,
   SecurityScanOutlined,
   ThunderboltOutlined,
+  SearchOutlined,
 } from '@ant-design/icons';
 import { api } from '../../services/api';
 import type { TestCase, Project, Environment, Device, TestStep, TestCaseStatistics } from '../../types';
@@ -467,6 +468,7 @@ const TestCases: React.FC = () => {
     disabled: 0,
     high_priority: 0,
   });
+  const [searchKeyword, setSearchKeyword] = useState<string>('');
 
   useEffect(() => {
     loadTestCases();
@@ -491,10 +493,14 @@ const TestCases: React.FC = () => {
   const loadTestCases = async () => {
     setLoading(true);
     try {
-      const response = await api.getTestCases({
+      const params: any = {
         page: pagination.current,
         page_size: pagination.pageSize,
-      });
+      };
+      if (searchKeyword.trim()) {
+        params.name = searchKeyword.trim();
+      }
+      const response = await api.getTestCases(params);
       setTestCases(response.list);
       setPagination(prev => ({
         ...prev,
@@ -511,6 +517,19 @@ const TestCases: React.FC = () => {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleSearch = () => {
+    setPagination(prev => ({ ...prev, current: 1 }));
+    loadTestCases();
+  };
+
+  const handleSearchReset = () => {
+    setSearchKeyword('');
+    setPagination(prev => ({ ...prev, current: 1 }));
+    setTimeout(() => {
+      loadTestCases();
+    }, 0);
   };
 
   const handleCreate = () => {
@@ -744,15 +763,10 @@ const TestCases: React.FC = () => {
     {
       title: '操作',
       key: 'action',
-      width: 120,
+      width: 200,
       fixed: 'right',
       render: (_, record) => {
         const items = [
-          {
-            key: 'view',
-            label: '查看详情',
-            icon: <EyeOutlined />,
-          },
           {
             key: 'execute',
             label: '执行测试',
@@ -761,11 +775,6 @@ const TestCases: React.FC = () => {
           {
             key: 'edit',
             label: '编辑信息',
-            icon: <EditOutlined />,
-          },
-          {
-            key: 'editSteps',
-            label: '编辑步骤',
             icon: <EditOutlined />,
           },
           {
@@ -781,17 +790,11 @@ const TestCases: React.FC = () => {
 
         const handleMenuClick = ({ key }: { key: string }) => {
           switch (key) {
-            case 'view':
-              handleViewDetails(record);
-              break;
             case 'execute':
               handleExecute(record);
               break;
             case 'edit':
               handleEdit(record);
-              break;
-            case 'editSteps':
-              handleEditSteps(record);
               break;
             case 'delete':
               Modal.confirm({
@@ -805,15 +808,33 @@ const TestCases: React.FC = () => {
         };
 
         return (
-          <Dropdown
-            menu={{ 
-              items,
-              onClick: handleMenuClick
-            }}
-            trigger={['click']}
-          >
-            <Button type="text" icon={<MoreOutlined />} />
-          </Dropdown>
+          <Space size="small">
+            <Button 
+              type="link" 
+              size="small"
+              icon={<EyeOutlined />} 
+              onClick={() => handleViewDetails(record)}
+            >
+              详情
+            </Button>
+            <Button 
+              type="link"
+              size="small" 
+              icon={<EditOutlined />} 
+              onClick={() => handleEditSteps(record)}
+            >
+              编辑步骤
+            </Button>
+            <Dropdown
+              menu={{ 
+                items,
+                onClick: handleMenuClick
+              }}
+              trigger={['click']}
+            >
+              <Button type="link" size="small">更多 ...</Button>
+            </Dropdown>
+          </Space>
         );
       },
     },
@@ -864,6 +885,24 @@ const TestCases: React.FC = () => {
             <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>
               新建测试用例
             </Button>
+            <Input.Search
+              placeholder="请输入测试用例名称"
+              value={searchKeyword}
+              onChange={(e) => setSearchKeyword(e.target.value)}
+              onSearch={handleSearch}
+              onPressEnter={handleSearch}
+              style={{ width: 300 }}
+              enterButton={
+                <Button type="primary" icon={<SearchOutlined />}>
+                  搜索
+                </Button>
+              }
+            />
+            {searchKeyword && (
+              <Button onClick={handleSearchReset}>
+                清空搜索
+              </Button>
+            )}
             <Button icon={<ReloadOutlined />} onClick={loadTestCases}>
               刷新
             </Button>

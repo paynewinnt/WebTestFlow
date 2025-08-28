@@ -199,12 +199,11 @@ const UserManagement: React.FC = () => {
     {
       title: '操作',
       key: 'action',
-      fixed: 'right',
-      width: isAdmin ? 160 : 100,
       render: (_, record: User) => (
-        <Space>
+        <Space size="small">
           <Button
-            type="text"
+            type="link"
+            size="small"
             icon={<EditOutlined />}
             onClick={() => handleEdit(record)}
           >
@@ -212,7 +211,8 @@ const UserManagement: React.FC = () => {
           </Button>
           {isAdmin && (
             <Button
-              type="text"
+              type="link"
+              size="small"
               icon={<LockOutlined />}
               onClick={() => handleChangePassword(record)}
             >
@@ -233,7 +233,8 @@ const UserManagement: React.FC = () => {
             用户管理
           </Space>
         }
-        extra={
+      >
+        <div style={{ marginBottom: 16 }}>
           <Button
             type="primary"
             icon={<PlusOutlined />}
@@ -241,8 +242,7 @@ const UserManagement: React.FC = () => {
           >
             新建用户
           </Button>
-        }
-      >
+        </div>
         <Table
           columns={columns}
           dataSource={users}

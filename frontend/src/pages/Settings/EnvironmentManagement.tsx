@@ -150,12 +150,11 @@ const EnvironmentManagement: React.FC = () => {
     {
       title: '操作',
       key: 'action',
-      fixed: 'right',
-      width: 150,
       render: (_, record: Environment) => (
-        <Space>
+        <Space size="small">
           <Button
-            type="text"
+            type="link"
+            size="small"
             icon={<EditOutlined />}
             onClick={() => handleEdit(record)}
           >
@@ -168,7 +167,8 @@ const EnvironmentManagement: React.FC = () => {
             cancelText="取消"
           >
             <Button
-              type="text"
+              type="link"
+              size="small"
               danger
               icon={<DeleteOutlined />}
             >
@@ -189,7 +189,8 @@ const EnvironmentManagement: React.FC = () => {
             环境管理
           </Space>
         }
-        extra={
+      >
+        <div style={{ marginBottom: 16 }}>
           <Button
             type="primary"
             icon={<PlusOutlined />}
@@ -197,8 +198,7 @@ const EnvironmentManagement: React.FC = () => {
           >
             新建环境
           </Button>
-        }
-      >
+        </div>
         <Table
           columns={columns}
           dataSource={environments}
