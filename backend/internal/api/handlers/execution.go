@@ -544,6 +544,38 @@ func StopExecution(c *gin.Context) {
 		return
 	}
 
+	// If this is a test suite execution, also cancel all child executions
+	if execution.ExecutionType == "test_suite" {
+		// Find all child executions (test case executions that belong to this suite execution)
+		var childExecutions []models.TestExecution
+		err = database.DB.Where("parent_execution_id = ? AND (status = ? OR status = ?)", 
+			execution.ID, "pending", "running").Find(&childExecutions).Error
+		if err == nil && len(childExecutions) > 0 {
+			log.Printf("Cancelling %d child executions for suite execution %d", len(childExecutions), execution.ID)
+			
+			// Cancel all running child executions in the executor
+			for _, childExec := range childExecutions {
+				if childExec.Status == "running" && executor.GlobalExecutor != nil {
+					executor.GlobalExecutor.CancelExecution(childExec.ID)
+				}
+			}
+			
+			// Update all pending/running child executions to cancelled
+			err = database.DB.Model(&models.TestExecution{}).
+				Where("parent_execution_id = ? AND (status = ? OR status = ?)", 
+					execution.ID, "pending", "running").
+				Updates(map[string]interface{}{
+					"status": "cancelled",
+					"error_message": "测试套件执行被用户停止",
+				}).Error
+			if err != nil {
+				log.Printf("Failed to cancel child executions: %v", err)
+			} else {
+				log.Printf("Successfully cancelled all child executions for suite %d", execution.ID)
+			}
+		}
+	}
+
 	response.SuccessWithMessage(c, "停止执行成功", nil)
 }
 

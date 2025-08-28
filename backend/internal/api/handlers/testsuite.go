@@ -717,6 +717,23 @@ func ExecuteTestSuite(c *gin.Context) {
 			
 			// 启动所有测试用例的并行执行
 			for i, execution := range executions {
+				// Check if the suite execution has been cancelled before starting each test case
+				var currentSuiteExecution models.TestExecution
+				if err := database.DB.First(&currentSuiteExecution, suiteExecution.ID).Error; err == nil {
+					if currentSuiteExecution.Status == "cancelled" {
+						log.Printf("Suite execution %d has been cancelled, stopping parallel execution launch", suiteExecution.ID)
+						// Mark all remaining pending executions as cancelled
+						for j := i; j < len(executions); j++ {
+							executions[j].Status = "cancelled"
+							executions[j].ErrorMessage = "测试套件执行被用户停止"
+							now := time.Now()
+							executions[j].EndTime = &now
+							database.DB.Save(&executions[j])
+						}
+						break
+					}
+				}
+				
 				wg.Add(1)
 				go func(exec models.TestExecution, index int) {
 					defer wg.Done()
@@ -737,6 +754,20 @@ func ExecuteTestSuite(c *gin.Context) {
 							database.DB.Save(&exec)
 						}
 					}()
+
+					// Check again if suite is cancelled before starting execution
+					var currentSuiteExecution models.TestExecution
+					if err := database.DB.First(&currentSuiteExecution, suiteExecution.ID).Error; err == nil {
+						if currentSuiteExecution.Status == "cancelled" {
+							log.Printf("Suite execution %d has been cancelled, skipping test case %d", suiteExecution.ID, exec.ID)
+							exec.Status = "cancelled"
+							exec.ErrorMessage = "测试套件执行被用户停止"
+							now := time.Now()
+							exec.EndTime = &now
+							database.DB.Save(&exec)
+							return
+						}
+					}
 
 					exec.Status = "running"
 					database.DB.Save(&exec)
@@ -815,6 +846,23 @@ func ExecuteTestSuite(c *gin.Context) {
 			log.Printf("Starting SERIAL execution of %d test cases for suite %d", len(executions), testSuite.ID)
 			
 			for i, execution := range executions {
+				// Check if the suite execution has been cancelled before starting each test case
+				var currentSuiteExecution models.TestExecution
+				if err := database.DB.First(&currentSuiteExecution, suiteExecution.ID).Error; err == nil {
+					if currentSuiteExecution.Status == "cancelled" {
+						log.Printf("Suite execution %d has been cancelled, stopping execution of remaining test cases", suiteExecution.ID)
+						// Mark all remaining pending executions as cancelled
+						for j := i; j < len(executions); j++ {
+							executions[j].Status = "cancelled"
+							executions[j].ErrorMessage = "测试套件执行被用户停止"
+							now := time.Now()
+							executions[j].EndTime = &now
+							database.DB.Save(&executions[j])
+						}
+						break
+					}
+				}
+
 				execution.Status = "running"
 				database.DB.Save(&execution)
 
