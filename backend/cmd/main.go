@@ -11,6 +11,7 @@ import (
 	"webtestflow/backend/internal/executor"
 	"webtestflow/backend/internal/services"
 	"webtestflow/backend/pkg/auth"
+	"webtestflow/backend/pkg/chrome"
 	"webtestflow/backend/pkg/database"
 
 	"github.com/gin-gonic/gin"
@@ -30,6 +31,10 @@ func main() {
 	if err := database.InitDatabase(cfg); err != nil {
 		log.Fatal("Failed to initialize database:", err)
 	}
+
+	// Initialize dynamic device manager
+	chrome.InitializeDeviceManager(database.DB)
+	log.Println("✅ Dynamic device manager initialized")
 
 	// Initialize test executor
 	executor.InitExecutor(cfg.Chrome.MaxInstances)

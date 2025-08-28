@@ -64,7 +64,7 @@ func LoadConfig() (*Config, error) {
 		},
 		Chrome: ChromeConfig{
 			HeadlessMode: getEnvAsBool("CHROME_HEADLESS", false),
-			MaxInstances: getEnvAsInt("CHROME_MAX_INSTANCES", 10),
+			MaxInstances: getEnvAsInt("CHROME_MAX_INSTANCES", 20),
 			DebugPort:    getEnvAsInt("CHROME_DEBUG_PORT", 9222),
 		},
 	}

@@ -20,7 +20,6 @@ import (
 
 	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
-	"github.com/chromedp/chromedp/device"
 )
 
 type TestExecutor struct {
@@ -154,6 +153,7 @@ func (te *TestExecutor) ExecuteTestCaseDirectly(execution *models.TestExecution,
 	defer func() {
 		te.mutex.Lock()
 		delete(te.running, execution.ID)
+		delete(te.cancels, execution.ID) // 清理cancel函数
 		te.mutex.Unlock()
 	}()
 
@@ -212,6 +212,11 @@ func (te *TestExecutor) GetRunningCount() int {
 	te.mutex.RLock()
 	defer te.mutex.RUnlock()
 	return len(te.running)
+}
+
+// GetMaxWorkers returns the maximum number of concurrent workers
+func (te *TestExecutor) GetMaxWorkers() int {
+	return te.maxWorkers
 }
 
 // NotifyExecutionComplete signals the executor that the handler has finished updating the database
@@ -316,9 +321,9 @@ func (te *TestExecutor) executeTestCase(executionID uint, testCase *models.TestC
 
 	if existingPort == 0 {
 		// 启动新的Chrome实例（可视化模式），直接加载目标URL避免空白页
-		result.addLog("info", fmt.Sprintf("🚀 Starting Chrome in visual mode with target URL: %s", targetURL), -1)
+		result.addLog("info", fmt.Sprintf("🚀 Starting Chrome in visual mode for device '%s' with target URL: %s", testCase.Device.Name, targetURL), -1)
 
-		port, err = chrome.GlobalChromeManager.StartChromeWithURL(executionID, true, targetURL)
+		port, err = chrome.GlobalChromeManager.StartChromeWithDevice(executionID, true, targetURL, testCase.Device.Name)
 		if err != nil {
 			result.Success = false
 			result.ErrorMessage = fmt.Sprintf("Failed to start Chrome: %v", err)
@@ -433,8 +438,21 @@ func (te *TestExecutor) executeTestCase(executionID uint, testCase *models.TestC
 		chromedp.WithLogf(func(string, ...interface{}) {}), // 禁用ChromeDP的debug日志
 	)
 
-	// 保存Chrome上下文以便后续清理使用
-	// Store Chrome context for graceful cleanup - removed for visual execution protection
+	// 存储cancel函数到cancels map，用于停止执行时取消context
+	te.mutex.Lock()
+	te.cancels[executionID] = func() {
+		if cancel3 != nil {
+			cancel3()
+		}
+		if cancel2 != nil {
+			cancel2()
+		}
+		if cancel != nil {
+			cancel()
+		}
+	}
+	te.mutex.Unlock()
+	result.addLog("info", "🔧 Cancel function registered for execution cancellation", -1)
 
 	// 测试连接是否成功 - 尝试获取当前页面标题
 	var pageTitle string
@@ -467,20 +485,72 @@ func (te *TestExecutor) executeTestCase(executionID uint, testCase *models.TestC
 	// 设置设备模拟
 	result.addLog("info", fmt.Sprintf("📱 Configuring device emulation: %s (%dx%d)", testCase.Device.Name, testCase.Device.Width, testCase.Device.Height), -1)
 
-	// Enable device emulation with mobile parameters
-	deviceInfo := device.Info{
-		Name:      testCase.Device.Name,
-		UserAgent: testCase.Device.UserAgent,
-		Width:     int64(testCase.Device.Width),
-		Height:    int64(testCase.Device.Height),
-		Scale:     1.0,
-		Landscape: false, // Portrait mode for mobile devices
-		Mobile:    true,  // Enable mobile mode
-		Touch:     true,  // Enable touch events
+	// Get complete device info from device manager or predefined devices
+	var deviceInfo chrome.DeviceInfo
+	deviceFound := false
+	
+	// Try to get from device manager first (includes dynamic devices)
+	if deviceManager := chrome.GetDeviceManager(); deviceManager != nil {
+		if dev, err := deviceManager.GetDevice(testCase.Device.Name); err == nil {
+			deviceInfo = dev
+			deviceFound = true
+			result.addLog("info", fmt.Sprintf("📱 Using device configuration from manager: %s (mobile=%t, touch=%t, ratio=%.1f)", 
+				deviceInfo.Name, deviceInfo.Mobile, deviceInfo.Touch, deviceInfo.DevicePixelRatio), -1)
+		}
+	}
+	
+	// Fallback to predefined devices
+	if !deviceFound {
+		if predefinedDevice, exists := chrome.PredefinedDevices[testCase.Device.Name]; exists {
+			deviceInfo = predefinedDevice
+			deviceFound = true
+			result.addLog("info", fmt.Sprintf("📱 Using predefined device: %s", deviceInfo.Name), -1)
+		}
+	}
+	
+	// If device still not found, create from database values with intelligent defaults
+	if !deviceFound {
+		// Determine device type based on name and size
+		isMobile := false
+		isTouch := false
+		devicePixelRatio := 1.0
+		
+		nameLower := strings.ToLower(testCase.Device.Name)
+		if strings.Contains(nameLower, "desktop") || strings.Contains(nameLower, "laptop") {
+			isMobile = false
+			isTouch = false
+			devicePixelRatio = 1.0
+		} else if strings.Contains(nameLower, "iphone") || strings.Contains(nameLower, "android") || 
+		          strings.Contains(nameLower, "mobile") || testCase.Device.Width <= 768 {
+			isMobile = true
+			isTouch = true
+			if testCase.Device.Width <= 414 {
+				devicePixelRatio = 3.0
+			} else {
+				devicePixelRatio = 2.0
+			}
+		} else if strings.Contains(nameLower, "ipad") || strings.Contains(nameLower, "tablet") {
+			isMobile = true
+			isTouch = true
+			devicePixelRatio = 2.0
+		}
+		
+		deviceInfo = chrome.DeviceInfo{
+			Name:             testCase.Device.Name,
+			Width:            int64(testCase.Device.Width),
+			Height:           int64(testCase.Device.Height),
+			UserAgent:        testCase.Device.UserAgent,
+			DevicePixelRatio: devicePixelRatio,
+			Mobile:           isMobile,
+			Touch:            isTouch,
+		}
+		
+		result.addLog("info", fmt.Sprintf("📱 Created device config from database: %s (%dx%d, mobile=%t, touch=%t, ratio=%.1f)", 
+			deviceInfo.Name, deviceInfo.Width, deviceInfo.Height, deviceInfo.Mobile, deviceInfo.Touch, deviceInfo.DevicePixelRatio), -1)
 	}
 
-	// Apply device emulation
-	err = chromedp.Run(ctx, chromedp.Emulate(deviceInfo))
+	// Apply device emulation using our custom function
+	err = chrome.ApplyDeviceEmulation(ctx, deviceInfo)
 	if err != nil {
 		result.Success = false
 		result.ErrorMessage = fmt.Sprintf("Failed to setup device emulation: %v", err)

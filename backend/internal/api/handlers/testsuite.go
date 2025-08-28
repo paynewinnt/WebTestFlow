@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"strconv"
 	"sync"
 	"time"
@@ -402,7 +403,9 @@ func ExecuteTestSuite(c *gin.Context) {
 
 	// Parse request body for execution options (force visual execution)
 	var req struct {
-		IsVisual bool `json:"is_visual"`
+		IsVisual           bool  `json:"is_visual"`
+		ContinueFailedOnly bool  `json:"continue_failed_only"` // 只执行未通过的测试用例
+		ParentExecutionID  *uint `json:"parent_execution_id"`  // 原始执行ID，用于继续执行时判断测试用例状态
 	}
 	c.ShouldBindJSON(&req)
 	// Force visual execution only
@@ -440,6 +443,69 @@ func ExecuteTestSuite(c *gin.Context) {
 		return
 	}
 
+	// 如果是继续执行模式，过滤掉已经通过的测试用例
+	var testCasesToExecute []models.TestCase
+	if req.ContinueFailedOnly {
+		log.Printf("Continue failed only mode: filtering passed test cases")
+		
+		if req.ParentExecutionID != nil {
+			// 基于指定的原始执行ID来判断测试用例状态
+			log.Printf("Using parent execution ID %d to determine test case status", *req.ParentExecutionID)
+			for _, testCase := range testSuite.TestCases {
+				// 查找该测试用例在指定套件执行中的执行记录
+				var suiteExecution models.TestExecution
+				err := database.DB.Where("test_case_id = ? AND parent_execution_id = ?", testCase.ID, *req.ParentExecutionID).
+					First(&suiteExecution).Error
+				
+				if err != nil {
+					// 如果没有找到执行记录，需要执行
+					testCasesToExecute = append(testCasesToExecute, testCase)
+					log.Printf("Test case %s (ID=%d): not executed in parent suite, will execute", testCase.Name, testCase.ID)
+				} else if suiteExecution.Status != "passed" {
+					// 如果状态不是通过，需要重新执行
+					testCasesToExecute = append(testCasesToExecute, testCase)
+					log.Printf("Test case %s (ID=%d): status=%s in parent suite, will execute", testCase.Name, testCase.ID, suiteExecution.Status)
+				} else {
+					// 如果状态是通过，跳过
+					log.Printf("Test case %s (ID=%d): status=passed in parent suite, will skip", testCase.Name, testCase.ID)
+				}
+			}
+		} else {
+			// 兼容旧逻辑：基于全局最新独立执行记录判断
+			log.Printf("No parent execution ID provided, using global latest execution records")
+			for _, testCase := range testSuite.TestCases {
+				// 查找该测试用例的最新执行记录
+				var latestExecution models.TestExecution
+				err := database.DB.Where("test_case_id = ? AND execution_type = 'test_case'", testCase.ID).
+					Order("start_time DESC").First(&latestExecution).Error
+				
+				if err != nil {
+					// 如果没有找到执行记录，说明从未执行过，需要执行
+					testCasesToExecute = append(testCasesToExecute, testCase)
+					log.Printf("Test case %s (ID=%d): no previous execution, will execute", testCase.Name, testCase.ID)
+				} else if latestExecution.Status != "passed" {
+					// 如果最新执行状态不是通过，需要重新执行
+					testCasesToExecute = append(testCasesToExecute, testCase)
+					log.Printf("Test case %s (ID=%d): last status=%s, will execute", testCase.Name, testCase.ID, latestExecution.Status)
+				} else {
+					// 如果最新执行状态是通过，跳过
+					log.Printf("Test case %s (ID=%d): last status=passed, will skip", testCase.Name, testCase.ID)
+				}
+			}
+		}
+		
+		if len(testCasesToExecute) == 0 {
+			response.BadRequest(c, "所有测试用例都已通过，无需重新执行")
+			return
+		}
+		
+		log.Printf("Continue mode: will execute %d out of %d test cases", len(testCasesToExecute), len(testSuite.TestCases))
+	} else {
+		// 正常执行模式，执行所有用例
+		testCasesToExecute = testSuite.TestCases
+		log.Printf("Normal mode: will execute all %d test cases", len(testCasesToExecute))
+	}
+
 	// Check if executor is available
 	if executor.GlobalExecutor == nil {
 		response.InternalServerError(c, "测试执行引擎未初始化")
@@ -447,8 +513,21 @@ func ExecuteTestSuite(c *gin.Context) {
 	}
 
 	runningCount := executor.GlobalExecutor.GetRunningCount()
-	if runningCount+len(testSuite.TestCases) > 10 {
-		response.BadRequest(c, "当前并发执行数不足以运行整个测试套件，请稍后再试")
+	maxWorkers := executor.GlobalExecutor.GetMaxWorkers()
+	
+	// 检查并发容量：串行执行只需要1个worker，并行执行需要足够的worker数量
+	requiredWorkers := 1 // 串行执行默认需要1个worker
+	if testSuite.IsParallel {
+		requiredWorkers = len(testCasesToExecute) // 并行执行需要与实际执行用例数量相等的worker
+	}
+	
+	if runningCount+requiredWorkers > maxWorkers {
+		executionMode := "串行"
+		if testSuite.IsParallel {
+			executionMode = "并行"
+		}
+		response.BadRequest(c, fmt.Sprintf("当前并发执行数不足以运行%s测试套件，请稍后再试。当前运行: %d, %s执行需要: %d, 最大容量: %d", 
+			executionMode, runningCount, executionMode, requiredWorkers, maxWorkers))
 		return
 	}
 
@@ -458,7 +537,7 @@ func ExecuteTestSuite(c *gin.Context) {
 		ExecutionType: "test_suite",
 		Status:        "pending",
 		StartTime:     time.Now(),
-		TotalCount:    len(testSuite.TestCases),
+		TotalCount:    len(testCasesToExecute), // 使用实际执行的用例数量
 		PassedCount:   0,
 		FailedCount:   0,
 		UserID:        userID.(uint),
@@ -475,11 +554,11 @@ func ExecuteTestSuite(c *gin.Context) {
 
 	// Create individual test case execution records (internal tracking only)
 	var executions []models.TestExecution
-	log.Printf("Creating execution records for %d test cases in suite %d", len(testSuite.TestCases), testSuite.ID)
-	for i, testCase := range testSuite.TestCases {
+	log.Printf("Creating execution records for %d test cases in suite %d", len(testCasesToExecute), testSuite.ID)
+	for i, testCase := range testCasesToExecute {
 		// Fix: Create a local copy of the ID to avoid the range loop variable pointer issue
 		testCaseID := testCase.ID
-		log.Printf("Creating execution record %d/%d for test case ID=%d, Name=%s", i+1, len(testSuite.TestCases), testCaseID, testCase.Name)
+		log.Printf("Creating execution record %d/%d for test case ID=%d, Name=%s", i+1, len(testCasesToExecute), testCaseID, testCase.Name)
 		execution := models.TestExecution{
 			TestCaseID:        &testCaseID, // Use pointer to local copy
 			TestSuiteID:       &testSuite.ID,
@@ -823,7 +902,21 @@ func StopTestSuite(c *gin.Context) {
 		return
 	}
 
-	// Stop all running/pending executions
+	// Cancel running executions in the executor
+	cancelledCount := 0
+	if executor.GlobalExecutor != nil {
+		for _, execution := range executions {
+			if execution.Status == "running" {
+				success := executor.GlobalExecutor.CancelExecution(execution.ID)
+				if success {
+					cancelledCount++
+					log.Printf("Successfully cancelled execution %d", execution.ID)
+				}
+			}
+		}
+	}
+
+	// Stop all running/pending executions in database
 	err = database.DB.Model(&models.TestExecution{}).
 		Where("test_suite_id = ? AND (status = ? OR status = ?)", id, "running", "pending").
 		Updates(models.TestExecution{Status: "cancelled"}).Error
@@ -832,8 +925,12 @@ func StopTestSuite(c *gin.Context) {
 		return
 	}
 
+	log.Printf("Stopped test suite %d: %d executions cancelled in executor, %d executions marked as cancelled in database", 
+		id, cancelledCount, len(executions))
+
 	response.SuccessWithMessage(c, "测试套件执行已停止", gin.H{
 		"stopped_count": len(executions),
+		"cancelled_count": cancelledCount,
 	})
 }
 
@@ -886,4 +983,485 @@ func GetTestSuiteExecutions(c *gin.Context) {
 	}
 
 	response.Page(c, executions, total, page, pageSize)
+}
+
+// GetLatestTestSuiteReport generates a report with latest test results for all test cases in a suite
+func GetLatestTestSuiteReport(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		response.BadRequest(c, "无效的测试套件ID")
+		return
+	}
+
+	var testSuite models.TestSuite
+	err = database.DB.Preload("Project").
+		Where("id = ? AND status = ?", id, 1).First(&testSuite).Error
+	if err != nil {
+		response.NotFound(c, "测试套件不存在")
+		return
+	}
+
+	// Load test cases with relations
+	err = database.DB.Model(&testSuite).Association("TestCases").Find(&testSuite.TestCases, "status = ?", 1)
+	if err != nil {
+		response.InternalServerError(c, "加载测试用例失败")
+		return
+	}
+
+	// For each test case, get its latest execution result
+	var latestExecutions []models.TestExecution
+	totalCount := len(testSuite.TestCases)
+	passedCount := 0
+	failedCount := 0
+
+	for _, testCase := range testSuite.TestCases {
+		var latestExecution models.TestExecution
+		err := database.DB.Preload("TestCase").Preload("TestCase.Environment").Preload("TestCase.Device").
+			Where("test_case_id = ? AND execution_type = 'test_case'", testCase.ID).
+			Order("start_time DESC").First(&latestExecution).Error
+		
+		if err != nil {
+			// No execution found for this test case, create a placeholder
+			latestExecution = models.TestExecution{
+				TestCaseID:    &testCase.ID,
+				TestCase:      testCase,
+				ExecutionType: "test_case",
+				Status:        "not_executed",
+				ErrorMessage:  "该用例尚未执行",
+				TotalCount:    0,
+				PassedCount:   0,
+				FailedCount:   0,
+				Duration:      0,
+				ExecutionLogs: "[]",
+				Screenshots:   "[]",
+				UserID:        1, // Default user
+			}
+		} else {
+			// Count results
+			if latestExecution.Status == "passed" {
+				passedCount++
+			} else if latestExecution.Status == "failed" {
+				failedCount++
+			}
+		}
+		
+		latestExecutions = append(latestExecutions, latestExecution)
+	}
+
+	// Create a virtual suite execution for reporting
+	now := time.Now()
+	virtualSuiteExecution := models.TestExecution{
+		TestSuiteID:   &testSuite.ID,
+		TestSuite:     testSuite,
+		ExecutionType: "test_suite_latest",
+		Status:        "completed",
+		StartTime:     now,
+		EndTime:       &now,
+		Duration:      0,
+		TotalCount:    totalCount,
+		PassedCount:   passedCount,
+		FailedCount:   failedCount,
+		ErrorMessage:  "",
+		ExecutionLogs: "[]",
+		Screenshots:   "[]",
+		UserID:        1, // Default user
+	}
+
+	// Determine overall status
+	if failedCount > 0 {
+		virtualSuiteExecution.Status = "failed"
+	} else if passedCount == totalCount {
+		virtualSuiteExecution.Status = "passed"
+	} else {
+		virtualSuiteExecution.Status = "partial"
+	}
+
+	response.Success(c, gin.H{
+		"suite_execution": virtualSuiteExecution,
+		"test_suite":      testSuite,
+		"executions":      latestExecutions,
+		"summary": gin.H{
+			"total_count":  totalCount,
+			"passed_count": passedCount,
+			"failed_count": failedCount,
+			"not_executed": totalCount - passedCount - failedCount,
+		},
+	})
+}
+
+// DownloadLatestTestSuiteReportHTML exports HTML report with latest test results
+func DownloadLatestTestSuiteReportHTML(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		response.BadRequest(c, "无效的测试套件ID")
+		return
+	}
+
+	var testSuite models.TestSuite
+	err = database.DB.Preload("Project").
+		Where("id = ? AND status = ?", id, 1).First(&testSuite).Error
+	if err != nil {
+		response.NotFound(c, "测试套件不存在")
+		return
+	}
+
+	// Load test cases with relations
+	err = database.DB.Model(&testSuite).Association("TestCases").Find(&testSuite.TestCases, "status = ?", 1)
+	if err != nil {
+		response.InternalServerError(c, "加载测试用例失败")
+		return
+	}
+
+	// Get latest executions for all test cases
+	var latestExecutions []models.TestExecution
+	totalCount := len(testSuite.TestCases)
+	passedCount := 0
+	failedCount := 0
+
+	for _, testCase := range testSuite.TestCases {
+		var latestExecution models.TestExecution
+		err := database.DB.Preload("TestCase").Preload("TestCase.Environment").Preload("TestCase.Device").
+			Where("test_case_id = ? AND execution_type = 'test_case'", testCase.ID).
+			Order("start_time DESC").First(&latestExecution).Error
+		
+		if err != nil {
+			// No execution found, create placeholder
+			latestExecution = models.TestExecution{
+				TestCaseID:    &testCase.ID,
+				TestCase:      testCase,
+				ExecutionType: "test_case",
+				Status:        "not_executed",
+				ErrorMessage:  "该用例尚未执行",
+				TotalCount:    0,
+				PassedCount:   0,
+				FailedCount:   0,
+				Duration:      0,
+				ExecutionLogs: "[]",
+				Screenshots:   "[]",
+				StartTime:     time.Now(),
+				UserID:        1, // Default user
+			}
+			endTime := time.Now()
+			latestExecution.EndTime = &endTime
+		} else {
+			if latestExecution.Status == "passed" {
+				passedCount++
+			} else if latestExecution.Status == "failed" {
+				failedCount++
+			}
+		}
+		
+		latestExecutions = append(latestExecutions, latestExecution)
+	}
+
+	// Create virtual suite execution
+	now := time.Now()
+	virtualSuiteExecution := models.TestExecution{
+		TestSuiteID:   &testSuite.ID,
+		TestSuite:     testSuite,
+		ExecutionType: "test_suite_latest",
+		Status:        "completed",
+		StartTime:     now,
+		EndTime:       &now,
+		Duration:      0,
+		TotalCount:    totalCount,
+		PassedCount:   passedCount,
+		FailedCount:   failedCount,
+		ErrorMessage:  "",
+		ExecutionLogs: "[]",
+		Screenshots:   "[]",
+		UserID:        1, // Default user
+	}
+
+	if failedCount > 0 {
+		virtualSuiteExecution.Status = "failed"
+	} else if passedCount == totalCount {
+		virtualSuiteExecution.Status = "passed"
+	} else {
+		virtualSuiteExecution.Status = "partial"
+	}
+
+	// Generate HTML report
+	htmlContent := generateTestSuiteLatestHTML(virtualSuiteExecution, testSuite, latestExecutions)
+
+	// Set response headers for file download
+	filename := fmt.Sprintf("测试套件_%s_最新结果报告_%s.html", testSuite.Name, now.Format("20060102_150405"))
+	c.Header("Content-Type", "text/html; charset=utf-8")
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename*=UTF-8''%s", filename))
+
+	c.String(http.StatusOK, htmlContent)
+}
+
+// DownloadLatestTestSuiteReportPDF exports PDF report with latest test results
+func DownloadLatestTestSuiteReportPDF(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		response.BadRequest(c, "无效的测试套件ID")
+		return
+	}
+
+	var testSuite models.TestSuite
+	err = database.DB.Preload("Project").
+		Where("id = ? AND status = ?", id, 1).First(&testSuite).Error
+	if err != nil {
+		response.NotFound(c, "测试套件不存在")
+		return
+	}
+
+	// Load test cases
+	err = database.DB.Model(&testSuite).Association("TestCases").Find(&testSuite.TestCases, "status = ?", 1)
+	if err != nil {
+		response.InternalServerError(c, "加载测试用例失败")
+		return
+	}
+
+	// Get latest executions
+	var latestExecutions []models.TestExecution
+	totalCount := len(testSuite.TestCases)
+	passedCount := 0
+	failedCount := 0
+
+	for _, testCase := range testSuite.TestCases {
+		var latestExecution models.TestExecution
+		err := database.DB.Preload("TestCase").Preload("TestCase.Environment").Preload("TestCase.Device").
+			Where("test_case_id = ? AND execution_type = 'test_case'", testCase.ID).
+			Order("start_time DESC").First(&latestExecution).Error
+		
+		if err != nil {
+			latestExecution = models.TestExecution{
+				TestCaseID:    &testCase.ID,
+				TestCase:      testCase,
+				ExecutionType: "test_case",
+				Status:        "not_executed",
+				ErrorMessage:  "该用例尚未执行",
+				Duration:      0,
+				StartTime:     time.Now(),
+				UserID:        1, // Default user
+			}
+			endTime := time.Now()
+			latestExecution.EndTime = &endTime
+		} else {
+			if latestExecution.Status == "passed" {
+				passedCount++
+			} else if latestExecution.Status == "failed" {
+				failedCount++
+			}
+		}
+		
+		latestExecutions = append(latestExecutions, latestExecution)
+	}
+
+	// Create virtual suite execution
+	now := time.Now()
+	virtualSuiteExecution := models.TestExecution{
+		TestSuiteID:   &testSuite.ID,
+		TestSuite:     testSuite,
+		ExecutionType: "test_suite_latest",
+		Status:        "completed",
+		StartTime:     now,
+		EndTime:       &now,
+		Duration:      0,
+		TotalCount:    totalCount,
+		PassedCount:   passedCount,
+		FailedCount:   failedCount,
+		ErrorMessage:  "",
+		ExecutionLogs: "[]",
+		Screenshots:   "[]",
+		UserID:        1, // Default user
+	}
+
+	if failedCount > 0 {
+		virtualSuiteExecution.Status = "failed"
+	} else if passedCount == totalCount {
+		virtualSuiteExecution.Status = "passed"
+	} else {
+		virtualSuiteExecution.Status = "partial"
+	}
+
+	// Generate HTML first
+	htmlContent := generateTestSuiteLatestHTML(virtualSuiteExecution, testSuite, latestExecutions)
+
+	// Convert to PDF using Chrome
+	pdfData, err := generatePDFFromHTML(htmlContent)
+	if err != nil {
+		response.InternalServerError(c, "生成PDF报告失败: "+err.Error())
+		return
+	}
+
+	// Set response headers for PDF download
+	filename := fmt.Sprintf("测试套件_%s_最新结果报告_%s.pdf", testSuite.Name, now.Format("20060102_150405"))
+	c.Header("Content-Type", "application/pdf")
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename*=UTF-8''%s", filename))
+	c.Header("Content-Length", strconv.Itoa(len(pdfData)))
+
+	c.Data(http.StatusOK, "application/pdf", pdfData)
+}
+
+
+// generateTestSuiteLatestHTML generates HTML report for test suite with latest results
+func generateTestSuiteLatestHTML(execution models.TestExecution, testSuite models.TestSuite, latestExecutions []models.TestExecution) string {
+	// Get server base URL
+	baseURL := getServerBaseURL()
+
+	// Generate test case results table
+	var resultsHTML string
+	for _, exec := range latestExecutions {
+		statusClass := "status-" + exec.Status
+		statusText := exec.Status
+		switch exec.Status {
+		case "passed":
+			statusText = "通过"
+		case "failed":
+			statusText = "失败"
+		case "not_executed":
+			statusText = "未执行"
+		}
+		
+		environmentName := ""
+		deviceName := ""
+		if exec.TestCase.Environment.Name != "" {
+			environmentName = exec.TestCase.Environment.Name
+		}
+		if exec.TestCase.Device.Name != "" {
+			deviceName = fmt.Sprintf("%s (%dx%d)", exec.TestCase.Device.Name, exec.TestCase.Device.Width, exec.TestCase.Device.Height)
+		}
+		
+		resultsHTML += fmt.Sprintf(`
+		<tr>
+			<td>%s</td>
+			<td>%s</td>
+			<td>%s</td>
+			<td><span class="%s">%s</span></td>
+			<td>%s</td>
+		</tr>`,
+			exec.TestCase.Name,
+			environmentName,
+			deviceName,
+			statusClass,
+			statusText,
+			exec.StartTime.Format("2006-01-02 15:04:05"),
+		)
+	}
+
+	// Calculate overall pass rate
+	passRate := float64(0)
+	if execution.TotalCount > 0 {
+		passRate = float64(execution.PassedCount) / float64(execution.TotalCount) * 100
+	}
+
+	// Generate HTML report
+	html := fmt.Sprintf(`
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>测试套件最新结果报告 - %s</title>
+	<style>
+		body { font-family: Arial, sans-serif; margin: 20px; }
+		.header { border-bottom: 2px solid #007bff; padding-bottom: 20px; margin-bottom: 30px; }
+		.title { color: #007bff; font-size: 28px; margin: 0; }
+		.subtitle { color: #6c757d; font-size: 16px; margin: 5px 0; }
+		.info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 30px; }
+		.info-section { background: #f8f9fa; padding: 15px; border-radius: 8px; }
+		.info-section h3 { color: #495057; margin: 0 0 10px 0; font-size: 16px; }
+		.info-row { margin: 5px 0; }
+		.info-label { font-weight: bold; color: #495057; }
+		.summary { background: linear-gradient(135deg, #007bff, #0056b3); color: white; padding: 20px; border-radius: 10px; margin-bottom: 30px; }
+		.summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; text-align: center; }
+		.summary-item { background: rgba(255, 255, 255, 0.1); padding: 15px; border-radius: 8px; }
+		.summary-number { font-size: 24px; font-weight: bold; margin-bottom: 5px; }
+		.summary-label { font-size: 14px; opacity: 0.9; }
+		table { width: 100%%; border-collapse: collapse; margin-top: 20px; }
+		th, td { border: 1px solid #dee2e6; padding: 12px; text-align: left; }
+		th { background-color: #007bff; color: white; font-weight: bold; }
+		tr:nth-child(even) { background-color: #f8f9fa; }
+		.status-passed { color: #28a745; font-weight: bold; }
+		.status-failed { color: #dc3545; font-weight: bold; }
+		.status-not_executed { color: #6c757d; font-weight: bold; }
+		.footer { margin-top: 30px; text-align: center; color: #6c757d; font-size: 12px; }
+	</style>
+</head>
+<body>
+	<div class="header">
+		<h1 class="title">测试套件最新结果报告</h1>
+		<div class="subtitle">%s - %s</div>
+		<div class="subtitle">报告生成时间: %s</div>
+	</div>
+	
+	<div class="info-grid">
+		<div class="info-section">
+			<h3>测试套件信息</h3>
+			<div class="info-row"><span class="info-label">套件名称:</span> %s</div>
+			<div class="info-row"><span class="info-label">项目名称:</span> %s</div>
+			<div class="info-row"><span class="info-label">套件描述:</span> %s</div>
+		</div>
+		<div class="info-section">
+			<h3>执行概要</h3>
+			<div class="info-row"><span class="info-label">执行类型:</span> 最新结果汇总</div>
+			<div class="info-row"><span class="info-label">数据来源:</span> 各用例最新执行</div>
+			<div class="info-row"><span class="info-label">通过率:</span> %.1f%%</div>
+		</div>
+	</div>
+	
+	<div class="summary">
+		<div class="summary-grid">
+			<div class="summary-item">
+				<div class="summary-number">%d</div>
+				<div class="summary-label">总用例数</div>
+			</div>
+			<div class="summary-item">
+				<div class="summary-number">%d</div>
+				<div class="summary-label">通过</div>
+			</div>
+			<div class="summary-item">
+				<div class="summary-number">%d</div>
+				<div class="summary-label">失败</div>
+			</div>
+			<div class="summary-item">
+				<div class="summary-number">%d</div>
+				<div class="summary-label">未执行</div>
+			</div>
+		</div>
+	</div>
+	
+	<h2>测试用例结果详情</h2>
+	<table>
+		<thead>
+			<tr>
+				<th>用例名称</th>
+				<th>测试环境</th>
+				<th>设备</th>
+				<th>执行状态</th>
+				<th>最后执行时间</th>
+			</tr>
+		</thead>
+		<tbody>
+			%s
+		</tbody>
+	</table>
+	
+	<div class="footer">
+		<p>此报告由 WebTestFlow 自动生成 | %s</p>
+		<p>报告基于各测试用例的最新执行结果汇总而成</p>
+	</div>
+</body>
+</html>`,
+		testSuite.Name,
+		testSuite.Project.Name,
+		testSuite.Name,
+		time.Now().Format("2006-01-02 15:04:05"),
+		testSuite.Name,
+		testSuite.Project.Name,
+		testSuite.Description,
+		passRate,
+		execution.TotalCount,
+		execution.PassedCount,
+		execution.FailedCount,
+		execution.TotalCount-execution.PassedCount-execution.FailedCount,
+		resultsHTML,
+		baseURL,
+	)
+
+	return html
 }

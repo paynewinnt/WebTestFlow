@@ -101,6 +101,14 @@ func SeedDefaultData() error {
 			IsDefault: false,
 			Status:    1,
 		},
+		{
+			Name:      "Desktop 960x700",
+			Width:     960,
+			Height:    700,
+			UserAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+			IsDefault: false,
+			Status:    1,
+		},
 	}
 
 	for _, device := range devices {

@@ -31,6 +31,25 @@ backend/vendor/
 /frontend/build/
 /frontend/dist/
 
+# Package files and archives
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.tar.bz2
+*.tar.xz
+*.rar
+*.7z
+*.pkg
+*.dmg
+*.msi
+
+# Compiled binaries
+webtestflow
+webtestflow.exe
+backend/webtestflow
+backend/webtestflow.exe
+
 # OS generated files
 .DS_Store
 .DS_Store?
@@ -87,3 +106,23 @@ services/ocr/venv/
 __pycache__/
 *.pyc
 *.pyo
+
+# OCR service temporary files
+services/ocr/tmp/
+
+# Temporary directories
+tmp/
+
+# Docker build context
+docker-build/
+.dockerignore
+
+# Release files
+releases/
+dist/
+build/
+
+# Installer files
+*.deb
+*.rpm
+*.AppImage

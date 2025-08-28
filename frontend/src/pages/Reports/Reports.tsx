@@ -21,6 +21,7 @@ import {
   Select,
   Empty,
   Dropdown,
+  Modal,
 } from 'antd';
 import {
   EyeOutlined,
@@ -31,6 +32,7 @@ import {
   ClockCircleOutlined,
   FileTextOutlined,
   FilePdfOutlined,
+  PlayCircleOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { api } from '../../services/api';
@@ -78,6 +80,18 @@ const Reports: React.FC = () => {
     current: 1,
     pageSize: 10,
     total: 0,
+  });
+  
+  // 继续执行确认弹窗相关状态
+  const [isContinueModalVisible, setIsContinueModalVisible] = useState(false);
+  const [continueExecutionData, setContinueExecutionData] = useState<{
+    execution: TestExecution | null;
+    testCases: any[];
+    loading: boolean;
+  }>({
+    execution: null,
+    testCases: [],
+    loading: false,
   });
 
   useEffect(() => {
@@ -348,6 +362,118 @@ const Reports: React.FC = () => {
     }
   };
 
+  // 显示继续执行确认弹窗
+  const handleContinueExecution = async (execution: TestExecution) => {
+    setContinueExecutionData(prev => ({ ...prev, loading: true }));
+    setIsContinueModalVisible(true);
+    
+    try {
+      if (execution.execution_type === 'test_suite') {
+        // 获取测试套件中所有测试用例的状态
+        if (!execution.test_suite_id) {
+          message.error('测试套件ID无效，无法继续执行');
+          setIsContinueModalVisible(false);
+          return;
+        }
+        
+        // 获取测试套件详情，包含所有测试用例
+        const suiteDetails = await api.getTestSuite(execution.test_suite_id);
+        const testCases = suiteDetails.test_cases || [];
+        
+        // 获取该套件执行的所有子执行记录
+        const suiteExecutions = await api.getExecutions({
+          parent_execution_id: execution.id,
+          include_internal: true,
+          page_size: 1000, // 确保获取所有子执行
+        });
+        
+        // 为每个测试用例匹配对应的执行结果
+        const testCasesWithStatus = testCases.map(testCase => {
+          const testCaseExecution = suiteExecutions.list?.find(
+            exec => exec.test_case_id === testCase.id
+          );
+          
+          return {
+            ...testCase,
+            latest_status: testCaseExecution?.status || 'not_executed',
+            latest_execution_time: testCaseExecution?.start_time || null,
+            should_execute: !testCaseExecution || testCaseExecution.status !== 'passed',
+          };
+        });
+        
+        setContinueExecutionData({
+          execution,
+          testCases: testCasesWithStatus,
+          loading: false,
+        });
+      } else if (execution.execution_type === 'test_case') {
+        // 单个测试用例
+        if (execution.status === 'passed') {
+          message.info('该测试用例已通过，无需重新执行');
+          setIsContinueModalVisible(false);
+          return;
+        }
+        
+        setContinueExecutionData({
+          execution,
+          testCases: [{
+            id: execution.test_case_id || 0,
+            name: execution.test_case?.name || '未知测试用例',
+            latest_status: execution.status,
+            latest_execution_time: execution.start_time,
+            should_execute: (execution.status as any) !== 'passed',
+          } as any],
+          loading: false,
+        });
+      } else {
+        message.error('不支持的执行类型');
+        setIsContinueModalVisible(false);
+      }
+    } catch (error) {
+      console.error('Failed to load execution details:', error);
+      message.error('获取执行详情失败');
+      setIsContinueModalVisible(false);
+      setContinueExecutionData(prev => ({ ...prev, loading: false }));
+    }
+  };
+
+  // 确认继续执行
+  const handleConfirmContinueExecution = async () => {
+    const { execution } = continueExecutionData;
+    if (!execution) return;
+    
+    try {
+      if (execution.execution_type === 'test_suite') {
+        const response = await api.executeTestSuite(execution.test_suite_id!, {
+          is_visual: true,
+          continue_failed_only: true, // 只执行失败的测试用例
+          parent_execution_id: execution.id, // 传递原始执行ID用于判断哪些测试用例需要重新执行
+        });
+        
+        message.success('测试套件继续执行已启动，将重新执行未通过的测试用例');
+        console.log('Suite continue execution started:', response);
+      } else if (execution.execution_type === 'test_case') {
+        const response = await api.executeTestCase(execution.test_case_id!, {
+          is_visual: true,
+        });
+        
+        message.success('测试用例重新执行已启动');
+        console.log('Test case re-execution started:', response);
+      }
+      
+      // 关闭弹窗并刷新列表
+      setIsContinueModalVisible(false);
+      setContinueExecutionData({
+        execution: null,
+        testCases: [],
+        loading: false,
+      });
+      loadExecutions();
+    } catch (error) {
+      console.error('Failed to continue execution:', error);
+      message.error('继续执行失败');
+    }
+  };
 
   const getStatusColor = (status: string) => {
     const colors: Record<string, string> = {
@@ -495,7 +621,7 @@ const Reports: React.FC = () => {
     {
       title: '操作',
       key: 'action',
-      width: 200,
+      width: 280,
       render: (_, record) => {
         const reportMenuItems = [
           {
@@ -521,6 +647,15 @@ const Reports: React.FC = () => {
               onClick={() => handleViewDetails(record)}
             >
               详情
+            </Button>
+            <Button
+              type="link"
+              size="small"
+              icon={<PlayCircleOutlined />}
+              onClick={() => handleContinueExecution(record)}
+              disabled={record.status === 'running' || record.status === 'pending'}
+            >
+              继续执行
             </Button>
             <Dropdown
               menu={{ items: reportMenuItems }}
@@ -1060,6 +1195,93 @@ const Reports: React.FC = () => {
           </div>
         )}
       </Drawer>
+
+      {/* 继续执行确认弹窗 */}
+      <Modal
+        title="继续执行确认"
+        open={isContinueModalVisible}
+        onOk={handleConfirmContinueExecution}
+        onCancel={() => {
+          setIsContinueModalVisible(false);
+          setContinueExecutionData({
+            execution: null,
+            testCases: [],
+            loading: false,
+          });
+        }}
+        width={800}
+        okText="确认执行"
+        cancelText="取消"
+        confirmLoading={continueExecutionData.loading}
+      >
+        {continueExecutionData.loading ? (
+          <div style={{ textAlign: 'center', padding: '40px 0' }}>
+            <span>正在加载测试用例信息...</span>
+          </div>
+        ) : (
+          <div>
+            <div style={{ marginBottom: 16 }}>
+              <Text strong>
+                {continueExecutionData.execution?.execution_type === 'test_suite' 
+                  ? '即将重新执行以下未通过的测试用例：' 
+                  : '即将重新执行该测试用例：'}
+              </Text>
+            </div>
+            
+            <Table
+              dataSource={continueExecutionData.testCases}
+              rowKey="id"
+              pagination={false}
+              size="middle"
+            >
+              <Table.Column
+                title="测试用例"
+                dataIndex="name"
+                key="name"
+                width={200}
+              />
+              <Table.Column
+                title="上次状态"
+                dataIndex="latest_status"
+                key="latest_status"
+                width={120}
+                render={(status) => (
+                  <Space>
+                    {getStatusIcon(status)}
+                    <Tag color={getStatusColor(status)}>
+                      {getStatusText(status)}
+                    </Tag>
+                  </Space>
+                )}
+              />
+              <Table.Column
+                title="上次执行时间"
+                dataIndex="latest_execution_time"
+                key="latest_execution_time"
+                width={150}
+                render={(time) => time ? dayjs(time).format('YYYY/M/D HH:mm:ss') : '未执行'}
+              />
+              <Table.Column
+                title="是否执行"
+                dataIndex="should_execute"
+                key="should_execute"
+                width={100}
+                render={(shouldExecute) => (
+                  <Tag color={shouldExecute ? 'orange' : 'green'}>
+                    {shouldExecute ? '将执行' : '跳过'}
+                  </Tag>
+                )}
+              />
+            </Table>
+            
+            {continueExecutionData.testCases.filter(tc => tc.should_execute).length === 0 && (
+              <div style={{ textAlign: 'center', padding: '20px 0', color: '#999' }}>
+                所有测试用例都已通过，无需重新执行
+              </div>
+            )}
+          </div>
+        )}
+      </Modal>
     </div>
   );
 };

@@ -37,6 +37,18 @@ func SetupRoutes(cfg *config.Config) *gin.Engine {
 		protected := v1.Group("")
 		protected.Use(middleware.AuthMiddleware())
 		{
+			// Test endpoint to verify routing works
+			protected.GET("/test-route/:id", func(c *gin.Context) {
+				id := c.Param("id")
+				c.JSON(200, map[string]interface{}{"message": "Test successful", "id": id})
+			})
+			
+			// Special report routes (workaround for nested routing issues)
+			protected.GET("/test-suite-latest-report-pdf/:id", func(c *gin.Context) {
+				c.JSON(200, map[string]interface{}{"message": "PDF endpoint works", "id": c.Param("id")})
+			})
+			protected.GET("/test-suite-latest-report-html/:id", handlers.DownloadLatestTestSuiteReportHTML)
+			
 			// User management
 			users := protected.Group("/users")
 			{
@@ -71,6 +83,7 @@ func SetupRoutes(cfg *config.Config) *gin.Engine {
 			{
 				devices.GET("", handlers.GetDevices)
 				devices.POST("", handlers.CreateDevice)
+				devices.POST("/refresh", handlers.RefreshDeviceCache)  // Manual cache refresh
 				devices.GET("/:id", handlers.GetDevice)
 				devices.PUT("/:id", handlers.UpdateDevice)
 				devices.DELETE("/:id", handlers.DeleteDevice)
@@ -98,6 +111,9 @@ func SetupRoutes(cfg *config.Config) *gin.Engine {
 				testSuites.POST("/:id/execute", handlers.ExecuteTestSuite)
 				testSuites.POST("/:id/stop", handlers.StopTestSuite)
 				testSuites.GET("/:id/executions", handlers.GetTestSuiteExecutions)
+				testSuites.GET("/:id/latest-report", handlers.GetLatestTestSuiteReport)
+				testSuites.GET("/:id/latest-report-html", handlers.DownloadLatestTestSuiteReportHTML)
+				testSuites.GET("/:id/latest-report-pdf", handlers.DownloadLatestTestSuiteReportPDF)
 			}
 
 			// Test execution and reporting

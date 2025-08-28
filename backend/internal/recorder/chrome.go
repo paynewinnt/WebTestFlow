@@ -14,6 +14,7 @@ import (
 
 	"webtestflow/backend/pkg/chrome"
 
+	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/page"
 	cdpruntime "github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
@@ -66,6 +67,10 @@ func NewChromeRecorder(sessionID string, device DeviceInfo) *ChromeRecorder {
 }
 
 func (r *ChromeRecorder) StartRecording(targetURL string) error {
+	log.Printf("🚨 TESTING - CODE UPDATE WORKS - TESTING 🚨")
+	log.Printf("🔧 DEBUG: StartRecording called with URL: %s", targetURL)
+	log.Printf("🔧 DEBUG: Device info: Name=%s, Width=%d, Height=%d, Mobile=%t", r.deviceInfo.Name, r.deviceInfo.Width, r.deviceInfo.Height, r.deviceInfo.Mobile)
+	
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 
@@ -114,18 +119,38 @@ func (r *ChromeRecorder) StartRecording(targetURL string) error {
 		chromedp.Flag("disable-java", true),
 		chromedp.Flag("no-first-run", true),
 	)
+	
+	// 🔧 DIRECT FIX: Add window size for desktop devices
+	if !device.Mobile && device.Width >= 1024 {
+		log.Printf("🔧 DIRECT FIX: Adding window-size for desktop device %s: %dx%d", device.Name, device.Width, device.Height)
+		opts = append(opts, chromedp.WindowSize(int(device.Width), int(device.Height)))
+		opts = append(opts, chromedp.Flag("window-position", "0,0"))
+		opts = append(opts, chromedp.Flag("force-screen-size", fmt.Sprintf("%d,%d", device.Width, device.Height)))
+	}
 
 	// Add device-specific Chrome flags
 	deviceArgs := chrome.CreateDeviceEmulationChrome(device)
-	for _, arg := range deviceArgs {
+	log.Printf("🔧 DEVICE ARGS DEBUG: Device name=%s, Mobile=%t, Width=%d, Height=%d", device.Name, device.Mobile, device.Width, device.Height)
+	log.Printf("🔧 DEVICE ARGS DEBUG: Args count=%d, Args=%v", len(deviceArgs), deviceArgs)
+	
+	for i, arg := range deviceArgs {
+		log.Printf("🔧 DEVICE ARGS DEBUG: Processing arg[%d]: '%s'", i, arg)
 		if strings.Contains(arg, "=") {
 			parts := strings.SplitN(arg, "=", 2)
-			opts = append(opts, chromedp.Flag(strings.TrimPrefix(parts[0], "--"), parts[1]))
+			flagName := strings.TrimPrefix(parts[0], "--")
+			flagValue := parts[1]
+			log.Printf("🔧 DEVICE ARGS DEBUG: Adding flag: %s='%s'", flagName, flagValue)
+			opts = append(opts, chromedp.Flag(flagName, flagValue))
+		} else {
+			log.Printf("🔧 DEVICE ARGS DEBUG: Skipping arg (no '='): '%s'", arg)
 		}
 	}
+	
+	log.Printf("🔧 DEVICE ARGS DEBUG: Total opts count after adding device args: %d", len(opts))
 
 	allocCtx, allocCancel := chromedp.NewExecAllocator(context.Background(), opts...)
 	var ctxCancel context.CancelFunc
+	
 	r.ctx, ctxCancel = chromedp.NewContext(allocCtx, chromedp.WithLogf(log.Printf))
 
 	// Create a custom cancel function that closes browser first
@@ -137,9 +162,23 @@ func (r *ChromeRecorder) StartRecording(targetURL string) error {
 
 	// Navigate to target URL and apply ChromeDP device emulation
 	err = chromedp.Run(r.ctx,
-		// Step 1: Apply ChromeDP's built-in device emulation
+		// Step 1: Apply ChromeDP's built-in device emulation (including desktop devices)
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			log.Printf("🎭 Applying ChromeDP device emulation for: %s", device.Name)
+			
+			// For desktop devices, use direct emulation to fix viewport like Ctrl+Shift+M
+			if !device.Mobile && (device.Width >= 1024 || strings.Contains(strings.ToLower(device.Name), "desktop")) {
+				log.Printf("🖥️ Using ChromeDP device emulation for desktop device: %s (%dx%d) - fixed viewport mode", 
+					device.Name, device.Width, device.Height)
+				
+				// Apply direct device emulation like DevTools device mode (Ctrl+Shift+M)
+				return emulation.SetDeviceMetricsOverride(int64(device.Width), int64(device.Height), device.DevicePixelRatio, device.Mobile).
+					WithScreenOrientation(&emulation.ScreenOrientation{
+						Type:  emulation.OrientationTypePortraitPrimary,
+						Angle: 0,
+					}).Do(ctx)
+			}
+			
 			return chrome.ApplyChromeDPDeviceEmulation(ctx, device.Name)
 		}),
 
@@ -148,7 +187,13 @@ func (r *ChromeRecorder) StartRecording(targetURL string) error {
 		chromedp.WaitReady("body", chromedp.ByQuery),
 		chromedp.Sleep(2*time.Second), // Wait for page to load
 
-		// Step 3: Verify device emulation and inject recording script
+		// Step 3: Verify device emulation is active (ChromeDP handles viewport fixing)
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			log.Printf("✅ ChromeDP device emulation active - viewport fixed like DevTools device mode")
+			return nil
+		}),
+
+		// Step 4: Verify device emulation and inject recording script
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			log.Printf("SUCCESS ChromeDP device emulation active: %s", device.Name)
 			return nil

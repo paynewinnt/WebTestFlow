@@ -35,6 +35,11 @@ func (cm *ChromeManager) StartChrome(executionID uint, isVisual bool) (int, erro
 
 // StartChromeWithURL starts a new Chrome instance with optional target URL and returns the debugging port
 func (cm *ChromeManager) StartChromeWithURL(executionID uint, isVisual bool, targetURL string) (int, error) {
+	return cm.StartChromeWithDevice(executionID, isVisual, targetURL, "")
+}
+
+// StartChromeWithDevice starts a new Chrome instance with device-specific configuration
+func (cm *ChromeManager) StartChromeWithDevice(executionID uint, isVisual bool, targetURL string, deviceName string) (int, error) {
 	cm.mutex.Lock()
 	defer cm.mutex.Unlock()
 
@@ -55,33 +60,79 @@ func (cm *ChromeManager) StartChromeWithURL(executionID uint, isVisual bool, tar
 		}
 	}
 
-	// Chrome arguments - minimal set to avoid unsupported flags warnings
+	// Chrome arguments - base arguments
 	args := []string{
 		"--remote-debugging-port=" + strconv.Itoa(port),
-		"--no-first-run",
-		"--disable-default-apps",
-		"--disable-extensions",
-		"--disable-infobars",                      // Disable automation infobars
-		"--disable-default-browser-check",         // Don't check if Chrome is default browser
-		"--disable-web-security",                  // Reduce security restrictions that might cause parsing issues
-		"--disable-features=VizDisplayCompositor", // Disable some features that might cause event parsing issues
-		"--disable-dev-shm-usage",                 // Overcome limited resource problems
-		"--disable-background-timer-throttling",   // Disable background timer throttling
-		"--disable-renderer-backgrounding",        // Disable renderer backgrounding
-		"--disable-backgrounding-occluded-windows", // Keep windows active
-		"--disable-ipc-flooding-protection",       // Allow high-frequency IPC
-		"--disable-javascript-harmony-shipping",   // Disable modern JS features that might support debugger
-		"--disable-v8-orinoco-incremental-marking", // Disable V8 debugging features
-		"--disable-breakpad",                      // Disable crash reporting that might interfere with debugging
-		"--disable-client-side-phishing-detection", // Disable features that might trigger debugger
-		"--disable-component-update",             // Prevent component updates that might reset settings
-		"--disable-domain-reliability",           // Disable domain reliability system
-		"--no-crash-upload",                      // Don't upload crash reports
-		"--disable-features=TranslateUI",         // Disable translate UI that might interfere
-		"--js-flags=--noexpose_debug_as_ --nodebug_compile_optimized --nobreak_on_undefined --noallow_natives_syntax --nodebug --nobreak_on_exception --nobreak_on_uncaught_exception", // Ultimate V8 debugger disable
 		"--user-data-dir=" + fmt.Sprintf("/tmp/chrome-data-%d", executionID),
-		"--no-default-browser-check", // Don't show default browser prompt
-		"--disable-sync",             // Disable sync to avoid sign-in prompts
+		"--enable-features=OverlayScrollbar",
+		"--disable-web-security",
+		"--disable-features=VizDisplayCompositor",
+	}
+
+	// Add device-specific arguments
+	if deviceName != "" {
+		if deviceManager := GetDeviceManager(); deviceManager != nil {
+			if deviceInfo, err := deviceManager.GetDevice(deviceName); err == nil {
+				log.Printf("🎭 Configuring Chrome startup for device: %s (%dx%d, mobile=%t, DPR=%.1f)", 
+					deviceInfo.Name, deviceInfo.Width, deviceInfo.Height, deviceInfo.Mobile, deviceInfo.DevicePixelRatio)
+				
+				if deviceInfo.Mobile {
+					// Mobile device arguments
+					args = append(args,
+						"--user-agent="+deviceInfo.UserAgent,
+						"--touch-events=enabled",
+						"--enable-viewport-meta",
+						fmt.Sprintf("--window-size=%d,%d", deviceInfo.Width, deviceInfo.Height),
+						fmt.Sprintf("--force-device-scale-factor=%.1f", deviceInfo.DevicePixelRatio),
+					)
+				} else {
+					// Desktop device arguments - ensure proper desktop rendering
+					args = append(args,
+						"--user-agent="+deviceInfo.UserAgent,
+						"--touch-events=disabled",
+						fmt.Sprintf("--window-size=%d,%d", deviceInfo.Width, deviceInfo.Height),
+						fmt.Sprintf("--force-device-scale-factor=%.1f", deviceInfo.DevicePixelRatio),
+						// Additional desktop-specific flags to prevent mobile-like rendering
+						"--disable-features=VizDisplayCompositor",
+						"--disable-viewport-meta",
+						"--enable-desktop-site",
+						fmt.Sprintf("--force-screen-size=%d,%d", deviceInfo.Width, deviceInfo.Height),
+					)
+				}
+			} else {
+				log.Printf("⚠️ Device '%s' not found, using default desktop configuration", deviceName)
+				// Default desktop configuration
+				args = append(args,
+					"--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+					"--touch-events=disabled",
+					"--window-size=1920,1080",
+					"--disable-features=VizDisplayCompositor",
+					"--disable-viewport-meta",
+					"--enable-desktop-site",
+					"--force-screen-size=1920,1080",
+				)
+			}
+		} else {
+			log.Printf("⚠️ Device manager not available, using default desktop configuration")
+			// Default desktop configuration  
+			args = append(args,
+				"--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+				"--touch-events=disabled",
+				"--window-size=1920,1080",
+				"--disable-features=VizDisplayCompositor",
+				"--disable-viewport-meta",
+				"--enable-desktop-site",
+				"--force-screen-size=1920,1080",
+			)
+		}
+	} else {
+		// No device specified, use default mobile configuration for backward compatibility
+		args = append(args,
+			"--user-agent=Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1",
+			"--touch-events=enabled",
+			"--enable-viewport-meta",
+			"--window-size=390,844",
+		)
 	}
 
 	if !isVisual {

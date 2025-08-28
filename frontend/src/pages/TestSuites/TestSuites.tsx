@@ -21,9 +21,11 @@ import {
   Statistic,
   Transfer,
   Divider,
+  Dropdown,
 } from 'antd';
 import dayjs from 'dayjs';
 import type { TransferDirection } from 'antd/es/transfer';
+import type { MenuProps } from 'antd';
 import {
   PlusOutlined,
   EditOutlined,
@@ -31,6 +33,9 @@ import {
   PlayCircleOutlined,
   EyeOutlined,
   ReloadOutlined,
+  DownloadOutlined,
+  FileTextOutlined,
+  FilePdfOutlined,
 } from '@ant-design/icons';
 import { api } from '../../services/api';
 import type { TestSuite, Project, Environment, TestCase, TestSuiteStatistics } from '../../types';
@@ -227,6 +232,39 @@ const TestSuites: React.FC = () => {
     setTargetKeys(newTargetKeys as string[]);
   };
 
+  // 获取最新测试报告
+  const handleDownloadLatestReport = (testSuite: TestSuite, format: 'html' | 'pdf') => {
+    const url = format === 'html' 
+      ? `/api/v1/test-suite-latest-report-html/${testSuite.id}`
+      : `/api/v1/test-suite-latest-report-pdf/${testSuite.id}`;
+    
+    // 创建隐藏的链接进行下载
+    const link = document.createElement('a');
+    link.href = url;
+    link.style.display = 'none';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    
+    message.success(`正在下载${format.toUpperCase()}格式的最新测试报告...`);
+  };
+
+  // 生成最新测试报告下拉菜单
+  const getLatestReportMenuItems = (testSuite: TestSuite): MenuProps['items'] => [
+    {
+      key: 'html',
+      label: 'HTML报告',
+      icon: <FileTextOutlined />,
+      onClick: () => handleDownloadLatestReport(testSuite, 'html'),
+    },
+    {
+      key: 'pdf',
+      label: 'PDF报告',
+      icon: <FilePdfOutlined />,
+      onClick: () => handleDownloadLatestReport(testSuite, 'pdf'),
+    },
+  ];
+
   const getPriorityColor = (priority: number) => {
     const colors = { 1: 'blue', 2: 'orange', 3: 'red' };
     return colors[priority as keyof typeof colors] || 'default';
@@ -350,7 +388,7 @@ const TestSuites: React.FC = () => {
     {
       title: '操作',
       key: 'action',
-      width: 200,
+      width: 280,
       render: (_, record) => (
         <Space size="small">
           <Button
@@ -377,6 +415,18 @@ const TestSuites: React.FC = () => {
           >
             编辑
           </Button>
+          <Dropdown
+            menu={{ items: getLatestReportMenuItems(record) }}
+            trigger={['click']}
+          >
+            <Button
+              type="link"
+              size="small"
+              icon={<DownloadOutlined />}
+            >
+              最新报告
+            </Button>
+          </Dropdown>
           <Popconfirm
             title="确定删除这个测试套件吗？"
             onConfirm={() => handleDelete(record.id)}

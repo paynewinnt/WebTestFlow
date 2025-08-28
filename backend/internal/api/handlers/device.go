@@ -1,8 +1,10 @@
 package handlers
 
 import (
+	"log"
 	"strconv"
 	"webtestflow/backend/internal/models"
+	"webtestflow/backend/pkg/chrome"
 	"webtestflow/backend/pkg/database"
 	"webtestflow/backend/pkg/response"
 
@@ -61,6 +63,15 @@ func CreateDevice(c *gin.Context) {
 	if err != nil {
 		response.InternalServerError(c, "创建设备失败")
 		return
+	}
+
+	// Auto-refresh device cache after creation
+	if deviceManager := chrome.GetDeviceManager(); deviceManager != nil {
+		if refreshErr := deviceManager.RefreshDevices(); refreshErr != nil {
+			log.Printf("⚠️ Failed to refresh device cache after creation: %v", refreshErr)
+		} else {
+			log.Printf("✅ Device cache refreshed after creating device: %s", device.Name)
+		}
 	}
 
 	response.SuccessWithMessage(c, "创建成功", device)
@@ -149,6 +160,15 @@ func UpdateDevice(c *gin.Context) {
 		return
 	}
 
+	// Auto-refresh device cache after update
+	if deviceManager := chrome.GetDeviceManager(); deviceManager != nil {
+		if refreshErr := deviceManager.RefreshDevices(); refreshErr != nil {
+			log.Printf("⚠️ Failed to refresh device cache after update: %v", refreshErr)
+		} else {
+			log.Printf("✅ Device cache refreshed after updating device: %s", device.Name)
+		}
+	}
+
 	response.SuccessWithMessage(c, "更新成功", device)
 }
 
@@ -198,5 +218,46 @@ func DeleteDevice(c *gin.Context) {
 		return
 	}
 
+	// Auto-refresh device cache after deletion
+	if deviceManager := chrome.GetDeviceManager(); deviceManager != nil {
+		if refreshErr := deviceManager.RefreshDevices(); refreshErr != nil {
+			log.Printf("⚠️ Failed to refresh device cache after deletion: %v", refreshErr)
+		} else {
+			log.Printf("✅ Device cache refreshed after deleting device: %s", device.Name)
+		}
+	}
+
 	response.SuccessWithMessage(c, "删除成功", nil)
+}
+
+// RefreshDeviceCache manually refreshes the device cache
+func RefreshDeviceCache(c *gin.Context) {
+	deviceManager := chrome.GetDeviceManager()
+	if deviceManager == nil {
+		response.InternalServerError(c, "设备管理器未初始化")
+		return
+	}
+
+	err := deviceManager.RefreshDevices()
+	if err != nil {
+		log.Printf("❌ Failed to refresh device cache manually: %v", err)
+		response.InternalServerError(c, "刷新设备缓存失败")
+		return
+	}
+
+	// Get updated device count for confirmation
+	allDevices, err := deviceManager.GetAllDevices()
+	if err != nil {
+		log.Printf("⚠️ Failed to get device count after refresh: %v", err)
+		response.SuccessWithMessage(c, "设备缓存刷新成功", map[string]interface{}{
+			"message": "缓存已刷新",
+		})
+		return
+	}
+
+	log.Printf("✅ Device cache refreshed manually, loaded %d devices", len(allDevices))
+	response.SuccessWithMessage(c, "设备缓存刷新成功", map[string]interface{}{
+		"message":     "缓存已刷新",
+		"device_count": len(allDevices),
+	})
 }

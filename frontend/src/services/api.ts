@@ -229,7 +229,7 @@ class ApiService {
     await this.instance.delete(`/test-suites/${id}`);
   }
 
-  async executeTestSuite(id: number, options?: { is_visual?: boolean }): Promise<TestExecution[]> {
+  async executeTestSuite(id: number, options?: { is_visual?: boolean; continue_failed_only?: boolean; parent_execution_id?: number }): Promise<TestExecution[]> {
     const response = await this.instance.post<ApiResponse<TestExecution[]>>(`/test-suites/${id}/execute`, options);
     return response.data.data!;
   }
@@ -244,6 +244,11 @@ class ApiService {
     page?: number;
     page_size?: number;
     status?: string;
+    test_case_id?: number;
+    project_id?: number;
+    environment_id?: number;
+    include_internal?: boolean;
+    parent_execution_id?: number;
   }): Promise<PageData<TestExecution>> {
     const response = await this.instance.get<ApiResponse<PageData<TestExecution>>>('/executions', { params });
     return response.data.data!;

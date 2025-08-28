@@ -27,21 +27,34 @@ func GetExecutions(c *gin.Context) {
 	status := c.Query("status")
 	projectID := c.Query("project_id")
 	environmentID := c.Query("environment_id")
+	testCaseID := c.Query("test_case_id")
 	executionType := c.Query("execution_type")
+	includeInternal := c.Query("include_internal") // 新参数：是否包含内部执行记录
+	parentExecutionID := c.Query("parent_execution_id") // 新参数：父执行ID过滤
 	startDate := c.Query("start_date")
 	endDate := c.Query("end_date")
 
 	if page <= 0 {
 		page = 1
 	}
-	if pageSize <= 0 || pageSize > 100 {
+	if pageSize <= 0 {
+		pageSize = 10
+	}
+	// 对于有parent_execution_id的查询，允许更大的页面大小以获取所有子执行记录
+	if parentExecutionID != "" && pageSize > 1000 {
+		pageSize = 1000
+	} else if parentExecutionID == "" && pageSize > 100 {
 		pageSize = 10
 	}
 
 	var executions []models.TestExecution
 	var total int64
 
-	query := database.DB.Model(&models.TestExecution{}).Where("execution_type != ?", "test_case_internal")
+	query := database.DB.Model(&models.TestExecution{})
+	// 根据参数决定是否排除内部执行记录
+	if includeInternal != "true" {
+		query = query.Where("execution_type != ?", "test_case_internal")
+	}
 	
 	// Apply filters
 	if status != "" {
@@ -63,8 +76,16 @@ func GetExecutions(c *gin.Context) {
 			environmentID, environmentID,
 		)
 	}
+	if testCaseID != "" {
+		// Filter by specific test case
+		query = query.Where("test_case_id = ?", testCaseID)
+	}
 	if executionType != "" {
 		query = query.Where("execution_type = ?", executionType)
+	}
+	if parentExecutionID != "" {
+		// Filter by parent execution ID
+		query = query.Where("parent_execution_id = ?", parentExecutionID)
 	}
 	if startDate != "" && endDate != "" {
 		query = query.Where("DATE(start_time) BETWEEN ? AND ?", startDate, endDate)
@@ -447,13 +468,17 @@ func GetCurrentBatchExecutions(c *gin.Context) {
 	}
 
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "50"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "1000")) // 默认获取更多记录
 
 	if page <= 0 {
 		page = 1
 	}
-	if pageSize <= 0 || pageSize > 100 {
-		pageSize = 50
+	if pageSize <= 0 {
+		pageSize = 1000 // 设置更大的默认值
+	}
+	// 对于测试套件执行详情，允许更大的页面大小以显示所有测试用例
+	if pageSize > 1000 {
+		pageSize = 1000
 	}
 
 	// 获取当前执行记录

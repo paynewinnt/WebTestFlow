@@ -63,10 +63,62 @@ var PredefinedChromeDPDevices = map[string]device.Info{
 		Mobile:    true,
 		Touch:     true,
 	},
+	"Desktop 1280x800": {
+		Name:      "Desktop 1280x800",
+		UserAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+		Width:     1280,
+		Height:    800,
+		Scale:     1.0,
+		Landscape: false,
+		Mobile:    false,
+		Touch:     false,
+	},
+	"Desktop 1920x1080": {
+		Name:      "Desktop 1920x1080",
+		UserAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+		Width:     1920,
+		Height:    1080,
+		Scale:     1.0,
+		Landscape: false,
+		Mobile:    false,
+		Touch:     false,
+	},
+	"Desktop 960x700": {
+		Name:      "Desktop 960x700",
+		UserAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+		Width:     960,
+		Height:    700,
+		Scale:     1.0,
+		Landscape: false,
+		Mobile:    false,
+		Touch:     false,
+	},
 }
 
-// GetChromeDPDevice returns a ChromeDP device.Info by name
+// convertDeviceInfoToChromeDPDevice converts DeviceInfo to ChromeDP device.Info
+func convertDeviceInfoToChromeDPDevice(deviceInfo DeviceInfo) device.Info {
+	return device.Info{
+		Name:      deviceInfo.Name,
+		UserAgent: deviceInfo.UserAgent,
+		Width:     int64(deviceInfo.Width),
+		Height:    int64(deviceInfo.Height),
+		Scale:     deviceInfo.DevicePixelRatio,
+		Landscape: false,
+		Mobile:    deviceInfo.Mobile,
+		Touch:     deviceInfo.Touch,
+	}
+}
+
+// GetChromeDPDevice returns a ChromeDP device.Info by name (supports dynamic devices)
 func GetChromeDPDevice(deviceName string) (device.Info, error) {
+	// Try to get from dynamic device manager first
+	if deviceManager != nil {
+		if deviceInfo, err := deviceManager.GetDevice(deviceName); err == nil {
+			return convertDeviceInfoToChromeDPDevice(deviceInfo), nil
+		}
+	}
+	
+	// Fallback to predefined ChromeDP devices
 	if dev, exists := PredefinedChromeDPDevices[deviceName]; exists {
 		return dev, nil
 	}
@@ -83,8 +135,8 @@ func ApplyChromeDPDeviceEmulation(ctx context.Context, deviceName string) error 
 		return err
 	}
 
-	log.Printf("🎭 Applying ChromeDP device emulation: %s (%dx%d)",
-		dev.Name, dev.Width, dev.Height)
+	log.Printf("🎭 Applying ChromeDP device emulation: %s (%dx%d, Scale=%.1f, Mobile=%t)",
+		dev.Name, dev.Width, dev.Height, dev.Scale, dev.Mobile)
 
 	// Use ChromeDP's built-in device emulation
 	return chromedp.Run(ctx, chromedp.Emulate(dev))
