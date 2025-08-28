@@ -93,6 +93,8 @@ go.work.sum
 # Local development and tools
 .claude/
 *.local
+.git-credentials
+.git-credentials-example
 
 # Screenshots (runtime generated)
 screenshots/
