@@ -128,3 +128,6 @@ build/
 *.deb
 *.rpm
 *.AppImage
+
+# sql backups
+backups/
